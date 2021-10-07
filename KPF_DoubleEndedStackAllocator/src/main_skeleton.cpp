@@ -1,9 +1,11 @@
 /**
 * Exercise: "DoubleEndedStackAllocator with Canaries" OR "Growing DoubleEndedStackAllocator with Canaries (VMEM)"
-* Group members: NAME1 (gsXXXX), NAME2 (gsXXXX), NAME3 (gsXXXX)
+* Group members: Handls Anja (gs20m005), Tributsch Harald (gsgs20m008), Leithner Michael (gs20m012)
 **/
 
 #include "stdio.h"
+
+#include <cassert>
 
 namespace Tests
 {
@@ -68,8 +70,16 @@ class DoubleEndedStackAllocator
 public:
 	DoubleEndedStackAllocator(size_t max_size) {}
 
-	void* Allocate(size_t size, size_t alignment) { return nullptr; }
-	void* AllocateBack(size_t size, size_t alignment) { return nullptr; }
+	void* Allocate(size_t size, size_t alignment)
+	{
+		assert(IsPowerOf2(alignment));
+
+		return nullptr;
+	}
+	void* AllocateBack(size_t size, size_t alignment)
+	{
+		return nullptr;
+	}
 
 	void Free(void* memory) {}
 	void FreeBack(void* memory) {}
@@ -79,7 +89,23 @@ public:
 	~DoubleEndedStackAllocator(void) {}
 
 private:
+	// power of 2 always has exactly 1 bit set in binary representation (for signed values)
+	bool IsPowerOf2(size_t val)
+	{
+		return val > 0 && !(val & (val - 1));
+	}
 };
+
+/** TODO
+* - reserve (virtual?) memory to be able to grow
+*		AlignUp/Down utility functions
+* - ability to grow
+*		just request new memory and copy?
+* - copy and move ctor/operator?
+* - allocate
+*		throw if overlap, invalid alignment, out of bounds, ...
+*		-> assert? throw? just msg and return nullptr?
+**/
 
 
 int main()
@@ -89,6 +115,22 @@ int main()
 		// You can remove this, just showcasing how the test functions can be used
 		DoubleEndedStackAllocator allocator(1024u);
 		Tests::Test_Case_Success("Allocate() returns nullptr", [&allocator](){ return allocator.Allocate(32, 1) == nullptr; }());
+
+		{
+			// TODO: temp tests, remove
+			// success
+			printf("allocator.Allocate(0, 1)...\n");
+			allocator.Allocate(0, 1);
+			printf("allocator.Allocate(0, 2)...\n");
+			allocator.Allocate(0, 2);
+
+			// fail
+			//printf("allocator.Allocate(0, 0)...\n");
+			//allocator.Allocate(0, 0);
+			//printf("allocator.Allocate(0, 3)...\n");
+			//allocator.Allocate(0, 3);
+		}
+
 	}
 
 	// You can do whatever you want here in the main function
