@@ -169,12 +169,16 @@ public:
 
 	void Free(void* memory)
 	{
-		ValidateMemoryPoiter(memory);
+		if (!ValidateMemoryPoiter(memory))
+		{
+			return;
+		}
 
 		// LIFO Check
 		if (reinterpret_cast<uintptr_t>(memory) != mFront)
 		{
 			assert(!"Pointer doesn't match last allocated memory, couldn't free memory");
+			return;
 		}
 
 		MetaData* currentMetadata = GetMetaData(reinterpret_cast<uintptr_t>(memory));
@@ -188,7 +192,10 @@ public:
 
 	void FreeBack(void* memory)
 	{
-		ValidateMemoryPoiter(memory);
+		if (!ValidateMemoryPoiter(memory))
+		{
+			return;
+		}
 
 		// LIFO Check
 		if (reinterpret_cast<uintptr_t>(memory) != mBack)
@@ -200,7 +207,7 @@ public:
 
 		CheckCanaries(reinterpret_cast<uintptr_t>(memory), currentMetadata->Size);
 
-		// We don't care what the user has written in the memory, therefore we just set the Front to the LastItem and "ignore" the previously allocated memory
+		// We don't care what the user has written in the memory, therefore we just set the Back to the LastItem and "ignore" the previously allocated memory
 		mBack = currentMetadata->LastItem;
 		mNumBackAllocs--;
 	}
@@ -273,17 +280,20 @@ private:
 	}
 
 	// Memory Pointer needs to be valid
-	void ValidateMemoryPoiter(void* memory)
+	bool ValidateMemoryPoiter(void* memory)
 	{
 		if (memory == nullptr)
 		{
 			assert(!"Invalid Pointer, couldn't free memory");
+			return false;
 		}
 
 		if ((reinterpret_cast<uintptr_t>(memory) < mBegin) || (reinterpret_cast<uintptr_t>(memory) > mEnd))
 		{
 			assert(!"Pointer not in range of reserved space, couldn't free memory");
+			return false;
 		}
+		return true;
 	}
 
 	// If Canaries are not valid, we're not allowed to free, because something has overwritten them
@@ -502,6 +512,32 @@ int main()
 						return alloc.Back() == alloc.End();
 					}());
 			}
+			{
+				DoubleEndedStackAllocator alloc(1024U);
+				Tests::Test_Case_Success("Verify Multiple Free Success", [&alloc]()
+					{
+						void* alloc1 = alloc.Allocate(sizeof(uint32_t), 2);
+						void* alloc2 = alloc.Allocate(sizeof(uint32_t), 2);
+						void* alloc3 = alloc.Allocate(sizeof(uint32_t), 2);
+						alloc.Free(alloc3);
+						alloc.Free(alloc2);
+						alloc.Free(alloc1);
+						return alloc.Front() == alloc.Begin();
+					}());
+			}
+			{
+				DoubleEndedStackAllocator alloc(1024U);
+				Tests::Test_Case_Success("Verify Multiple FreeBack Success", [&alloc]()
+					{
+						void* alloc1 = alloc.AllocateBack(sizeof(uint32_t), 2);
+						void* alloc2 = alloc.AllocateBack(sizeof(uint32_t), 2);
+						void* alloc3 = alloc.AllocateBack(sizeof(uint32_t), 2);
+						alloc.FreeBack(alloc3);
+						alloc.FreeBack(alloc2);
+						alloc.FreeBack(alloc1);
+						return alloc.Back() == alloc.End();
+					}());
+			}
 		}
 		// Fail tests
 #ifndef _DEBUG
@@ -543,6 +579,26 @@ int main()
 					void* alloc1 = alloc.AllocateBack(sizeof(uint32_t), 1);
 					return alloc1 != nullptr;
 				}());
+			}
+			{
+				DoubleEndedStackAllocator alloc(1024U);
+				Tests::Test_Case_Failure("Verify fail on invalid memory pointer (nullptr)", [&alloc]()
+					{
+						void* ptr = alloc.Allocate(sizeof(uint32_t), 1);
+						alloc.Free(nullptr);
+						return ptr != alloc.Front();
+					}());
+			}
+			{
+				DoubleEndedStackAllocator alloc(1024U);
+				Tests::Test_Case_Failure("Verify fail on invalid memory pointer (OutOfBounds)", [&alloc]()
+					{
+						void* ptr = alloc.Allocate(sizeof(uint32_t), 1);
+						void* helper = ptr;
+						helper = reinterpret_cast<void*>(reinterpret_cast<uintptr_t>(helper) + 1);
+						alloc.Free(helper);
+						return ptr != alloc.Front();
+					}());
 			}
 		}
 #endif
