@@ -22,26 +22,12 @@ namespace Tests
 {
 	void Test_Case_Success(const char* name, bool passed)
 	{
-		if (passed)
-		{
-			printf("[%s] passed the test!\n", name);
-		}
-		else
-		{
-			printf("[%s] failed the test!\n", name);
-		}
+		printf("[%s] [%s] the test!\n", name, passed ? "passed" : "failed");
 	}
 
 	void Test_Case_Failure(const char* name, bool passed)
 	{
-		if (!passed)
-		{
-			printf("[%s] passed the test!\n", name);
-		}
-		else
-		{
-			printf("[%s] failed the test!\n", name);
-		}
+		printf("[%s] [%s] the test!\n", name, !passed ? "passed" : "failed");
 	}
 
 	/**
@@ -54,7 +40,6 @@ namespace Tests
 	bool VerifyAllocationSuccess(A& allocator, size_t size, size_t alignment)
 	{
 		void* mem = allocator.Allocate(size, alignment);
-
 		if (mem == nullptr)
 		{
 			printf("[Error]: Allocator returned nullptr!\n");
@@ -82,16 +67,18 @@ class DoubleEndedStackAllocator
 public:
 	DoubleEndedStackAllocator(size_t max_size)
 	{
-		// TODO: VirtualAlloc
+		// TODO:
+		//	- VirtualAlloc
+		//	- check if begin and end are clean?
 
 		// reserve memory
 		mBegin = reinterpret_cast<uintptr_t>(malloc(max_size));
 		mEnd = mBegin + max_size;
 
 		#ifdef WITH_DEBUG_OUTPUT
-			printf("constructed allocator from \n[%x] to\n[%x]\n", mBegin, mEnd);
-			printf("size: [%u]\n", max_size);
-			printf("diff: [%u]\n", mEnd - mBegin);
+			printf("constructed allocator from \n[%llx] to\n[%llx]\n", mBegin, mEnd);
+			printf("size: [%llu]\n", max_size);
+			printf("diff: [%llu]\n", mEnd - mBegin);
 		#endif
 	}
 
@@ -125,7 +112,8 @@ public:
 
 	~DoubleEndedStackAllocator(void)
 	{
-		// TODO: give reserved memory back to system
+		// give reserved memory back to system
+		free((void *)mBegin);
 	}
 
 private:
