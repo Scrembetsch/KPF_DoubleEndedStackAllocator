@@ -272,21 +272,25 @@ private:
 		return val > 0 && !(val & (val - 1));
 	}
 
+#ifdef WITH_DEBUG_CANARIES
 	void WriteBeginCanary(uintptr_t alignedAddress)
 	{
-#ifdef WITH_DEBUG_CANARIES
 		uintptr_t canaryAddress = alignedAddress - META_SIZE - CANARY_SIZE;
 		*reinterpret_cast<uint32_t*>(canaryAddress) = CANARY;
-#endif
 	}
+#else
+	void WriteBeginCanary(uintptr_t){ }
+#endif
 
+#ifdef WITH_DEBUG_CANARIES
 	void WriteEndCanary(uintptr_t alignedAddress, size_t size)
 	{
-#ifdef WITH_DEBUG_CANARIES
 		uintptr_t canaryAddress = alignedAddress + size;
 		*reinterpret_cast<uint32_t*>(canaryAddress) = CANARY;
-#endif
 	}
+#else
+	void WriteEndCanary(uintptr_t, size_t){ }
+#endif
 
 	// Memory Pointer needs to be valid
 	bool ValidateMemoryPoiter(void* memory)
@@ -305,10 +309,11 @@ private:
 		return true;
 	}
 
+#ifdef WITH_DEBUG_CANARIES
 	// If Canaries are not valid, we're not allowed to free, because something has overwritten them
 	void CheckCanaries(uintptr_t alignedAddress, size_t size)
 	{
-#ifdef WITH_DEBUG_CANARIES
+
 		// Check Begin Canary
 		uintptr_t canaryAddress = alignedAddress - META_SIZE - CANARY_SIZE;
 		if (*reinterpret_cast<uint32_t*>(canaryAddress) != CANARY)
@@ -323,8 +328,10 @@ private:
 			assert(!"Invalid End Canary");
 			printf("[Warning]: Invalid End Canary!\n");
 		}
-#endif
 	}
+#else
+	void CheckCanaries(uintptr_t, size_t){ }
+#endif
 
 	void WriteMeta(uintptr_t alignedAddress, uintptr_t lastItem, size_t allocatedSize)
 	{
@@ -344,9 +351,9 @@ private:
 	};
 	static const ptrdiff_t META_SIZE = sizeof(MetaData);
 	//const uint32_t CANARY = 0xDEADC0DE;
-	static const uint32_t CANARY = 0xDEC0ADDE;
 
 #ifdef WITH_DEBUG_CANARIES
+	static const uint32_t CANARY = 0xDEC0ADDE;
 	static const ptrdiff_t CANARY_SIZE = sizeof(CANARY);
 #else
 	static const ptrdiff_t CANARY_SIZE = 0;
@@ -561,6 +568,46 @@ int main()
 							&& alloc.Back() == alloc.End();
 					}());
 			}
+			{
+				DoubleEndedStackAllocator alloc(1024U);
+				Tests::Test_Case_Success("Verify Alloc after Free Success", [&alloc]()
+				{
+					void* alloc1 = alloc.Allocate(sizeof(uint32_t) * 3, 2);
+					alloc.Free(alloc1);
+					void* alloc2 = alloc.Allocate(sizeof(uint32_t) * 2, 2);
+					return alloc.Front() == alloc2;
+				}());
+			}
+			{
+				DoubleEndedStackAllocator alloc(1024U);
+				Tests::Test_Case_Success("Verify Alloc Back after Free Back Success", [&alloc]()
+				{
+					void* alloc1 = alloc.AllocateBack(sizeof(uint32_t) * 3, 2);
+					alloc.FreeBack(alloc1);
+					void* alloc2 = alloc.AllocateBack(sizeof(uint32_t) * 2, 2);
+					return alloc.Back() == alloc2;
+				}());
+			}
+			{
+				DoubleEndedStackAllocator alloc(1024U);
+				Tests::Test_Case_Success("Verify Alloc after Free Success", [&alloc]()
+				{
+					alloc.Allocate(sizeof(uint32_t) * 3, 2);
+					alloc.Reset();
+					void* alloc2 = alloc.Allocate(sizeof(uint32_t) * 2, 2);
+					return alloc.Front() == alloc2;
+				}());
+			}
+			{
+				DoubleEndedStackAllocator alloc(1024U);
+				Tests::Test_Case_Success("Verify Alloc Back after Free Back Success", [&alloc]()
+				{
+					alloc.AllocateBack(sizeof(uint32_t) * 3, 2);
+					alloc.Reset();
+					void* alloc2 = alloc.AllocateBack(sizeof(uint32_t) * 2, 2);
+					return alloc.Back() == alloc2;
+				}());
+			}
 		}
 		// Fail tests
 #ifndef _DEBUG
@@ -681,6 +728,7 @@ int main()
 						return alloc2 != alloc.Back();
 					}());
 			}
+#ifdef WITH_DEBUG_CANARIES
 			{
 				DoubleEndedStackAllocator alloc(1024U);
 				Tests::Test_Case_Failure("Verify fail on free cause canaries were overwritten", [&alloc]()
@@ -703,8 +751,11 @@ int main()
 						return ptr == alloc.Back();
 					}());
 			}
+#endif
+
 		}
 #endif
+
 	}
 
 	// You can do whatever you want here in the main function
