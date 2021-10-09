@@ -14,6 +14,7 @@
 
 #include "stdio.h"
 
+#include <stdlib.h>
 #include <cassert>
 #include <cstdint>
 
@@ -67,6 +68,7 @@ namespace Tests
 // Assignment functionality tests are going to be included here
 
 #define WITH_DEBUG_CANARIES 0
+#define WITH_DEBUG_OUTPUT 0
 
 /**
 * You work on your DoubleEndedStackAllocator. Stick to the provided interface, this is
@@ -80,7 +82,17 @@ class DoubleEndedStackAllocator
 public:
 	DoubleEndedStackAllocator(size_t max_size)
 	{
-		// TODO: reserve memory (alloc, VirtualAlloc)
+		// TODO: VirtualAlloc
+
+		// reserve memory
+		mBegin = reinterpret_cast<uintptr_t>(malloc(max_size));
+		mEnd = mBegin + max_size;
+
+		#ifdef WITH_DEBUG_OUTPUT
+			printf("constructed allocator from \n[%x] to\n[%x]\n", mBegin, mEnd);
+			printf("size: [%u]\n", max_size);
+			printf("diff: [%u]\n", mEnd - mBegin);
+		#endif
 	}
 
 	void* Allocate(size_t size, size_t alignment)
@@ -190,6 +202,10 @@ int main()
 {
 	// You can add your own tests here, I will call my tests at then end with a fresh instance of your allocator and a specific max_size
 	{
+		{
+			DoubleEndedStackAllocator allocator(1);
+		}
+
 		// You can remove this, just showcasing how the test functions can be used
 		DoubleEndedStackAllocator allocator(1024u);
 		Tests::Test_Case_Success("Allocate() returns nullptr", [&allocator](){ return allocator.Allocate(32, 1) == nullptr; }());
