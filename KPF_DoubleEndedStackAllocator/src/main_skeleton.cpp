@@ -169,15 +169,40 @@ public:
 
 	void Free(void* memory)
 	{
-		mFront = mFront + (mFront - reinterpret_cast<uintptr_t>(memory));
-		// TODO: check if pointer is valid?
+		ValidateMemoryPoiter(memory);
 
-		// TODO: reposition pointer and free memory
+		// LIFO Check
+		if (reinterpret_cast<uintptr_t>(memory) != mFront)
+		{
+			assert(!"Pointer doesn't match last allocated memory, couldn't free memory");
+		}
+
+		MetaData* currentMetadata = GetMetaData(reinterpret_cast<uintptr_t>(memory));
+
+		CheckCanaries(reinterpret_cast<uintptr_t>(memory), currentMetadata->Size);
+
+		// We don't care what the user has written in the memory, therefore we just set the Front to the LastItem and "ignore" the previously allocated memory
+		mFront = currentMetadata->LastItem;
+		mNumFrontAllocs--;
 	}
 
 	void FreeBack(void* memory)
 	{
-		mBack = mBack + (mBack - reinterpret_cast<uintptr_t>(memory));
+		ValidateMemoryPoiter(memory);
+
+		// LIFO Check
+		if (reinterpret_cast<uintptr_t>(memory) != mBack)
+		{
+			assert(!"Pointer doesn't match last allocated memory, couldn't free memory");
+		}
+
+		MetaData* currentMetadata = GetMetaData(reinterpret_cast<uintptr_t>(memory));
+
+		CheckCanaries(reinterpret_cast<uintptr_t>(memory), currentMetadata->Size);
+
+		// We don't care what the user has written in the memory, therefore we just set the Front to the LastItem and "ignore" the previously allocated memory
+		mBack = currentMetadata->LastItem;
+		mNumBackAllocs--;
 	}
 
 	void Reset(void)
@@ -244,6 +269,41 @@ private:
 #ifdef WITH_DEBUG_CANARIES
 		uintptr_t canaryAddress = alignedAddress + size;
 		*reinterpret_cast<uint32_t*>(canaryAddress) = CANARY;
+#endif
+	}
+
+	// Memory Pointer needs to be valid
+	void ValidateMemoryPoiter(void* memory)
+	{
+		if (memory == nullptr)
+		{
+			assert(!"Invalid Pointer, couldn't free memory");
+		}
+
+		if ((reinterpret_cast<uintptr_t>(memory) < mBegin) || (reinterpret_cast<uintptr_t>(memory) > mEnd))
+		{
+			assert(!"Pointer not in range of reserved space, couldn't free memory");
+		}
+	}
+
+	// If Canaries are not valid, we're not allowed to free, because something has overwritten them
+	void CheckCanaries(uintptr_t alignedAddress, size_t size)
+	{
+#ifdef WITH_DEBUG_CANARIES
+		// Check Begin Canary
+		uintptr_t canaryAddress = alignedAddress - META_SIZE - CANARY_SIZE;
+		if (*reinterpret_cast<uint32_t*>(canaryAddress) != CANARY)
+		{
+			assert(!"Invalid Begin Canary");
+			printf("[Warning]: Invalid Front Canary!\n");
+		}
+		// Check End Canary
+		canaryAddress = alignedAddress + size;
+		if (*reinterpret_cast<uint32_t*>(canaryAddress) != CANARY)
+		{
+			assert(!"Invalid End Canary");
+			printf("[Warning]: Invalid End Canary!\n");
+		}
 #endif
 	}
 
@@ -423,6 +483,24 @@ int main()
 						&& alloc3 == alloc.Back()
 						&& alloc3 > alloc.Front();
 				}());
+			}
+			{
+				DoubleEndedStackAllocator alloc(1024U);
+				Tests::Test_Case_Success("Verify Free Success", [&alloc]()
+				{
+					void* ptr = alloc.Allocate(sizeof(uint32_t), 1);
+					alloc.Free(ptr);
+					return alloc.Front() == alloc.Begin();
+				}());
+			}
+			{
+				DoubleEndedStackAllocator alloc(1024U);
+				Tests::Test_Case_Success("Verify FreeBack Success", [&alloc]()
+					{
+						void* ptr = alloc.AllocateBack(sizeof(uint32_t), 1);
+						alloc.FreeBack(ptr);
+						return alloc.Back() == alloc.End();
+					}());
 			}
 		}
 		// Fail tests
