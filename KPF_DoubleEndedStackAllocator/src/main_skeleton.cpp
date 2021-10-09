@@ -55,7 +55,8 @@ namespace Tests
 // Assignment functionality tests are going to be included here
 
 #define WITH_DEBUG_CANARIES
-
+//#undef assert
+//#define assert(arg)
 /**
 * You work on your DoubleEndedStackAllocator. Stick to the provided interface, this is
 * necessary for testing your assignment in the end. Don't remove or rename the public
@@ -94,14 +95,15 @@ public:
 		assert(IsPowerOf2(alignment));
 
 		uintptr_t lastItem = mFront;
+		uintptr_t newFront = mFront;
 
 		if (mNumFrontAllocs != 0)
 		{
 			MetaData* meta = reinterpret_cast<MetaData*>(mFront - META_SIZE);
-			mFront = mFront + meta->Size + CANARY_SIZE;
+			newFront = mFront + meta->Size + CANARY_SIZE;
 		}
 
-		uintptr_t alignedAddress = AlignUp(mFront, alignment);
+		uintptr_t alignedAddress = AlignUp(newFront + CANARY_SIZE + META_SIZE, alignment);
 
 		bool overlap = false;
 		if (mNumBackAllocs == 0)
@@ -130,16 +132,16 @@ public:
 	void* AllocateBack(size_t size, size_t alignment)
 	{
 		assert(IsPowerOf2(alignment));
-
+		
 		uintptr_t lastItem = mBack;
+		uintptr_t newBack = mBack - size - CANARY_SIZE;
 
 		if (mNumBackAllocs != 0)
 		{
-			MetaData* meta = reinterpret_cast<MetaData*>(mBack - META_SIZE);
-			mBack = mBack - META_SIZE - CANARY_SIZE;
+			newBack = mBack - META_SIZE - 2 * CANARY_SIZE - size;
 		}
 
-		uintptr_t alignedAddress = AlignDown(mBack, alignment, size);
+		uintptr_t alignedAddress = AlignDown(newBack, alignment);
 
 		bool overlap = false;
 		if (mNumFrontAllocs == 0)
@@ -386,20 +388,19 @@ private:
 
 	uintptr_t AlignUp(uintptr_t address, size_t alignment)
 	{
-		size_t offsetAddress = address + META_SIZE + CANARY_SIZE;
-		if (offsetAddress % alignment == 0)
+		if (address % alignment == 0)
 		{
-			return offsetAddress;
+			return address;
 		}
 		else
 		{
-			return (offsetAddress + (alignment - (offsetAddress % alignment)));
+			return (address + (alignment - (address % alignment)));
 		}
 	}
 
-	uintptr_t AlignDown(uintptr_t address, size_t alignment, size_t allocSize)
+	uintptr_t AlignDown(uintptr_t address, size_t alignment)
 	{
-		size_t offsetAddress = address - allocSize - CANARY_SIZE;
+		size_t offsetAddress = address;
 		return (offsetAddress - (offsetAddress % alignment));
 	}
 
@@ -549,12 +550,12 @@ int main()
 				DoubleEndedStackAllocator alloc(1024U);
 				Tests::Test_Case_Success("Verify Reset Success", [&alloc]()
 					{
-						void* alloc1 = alloc.Allocate(sizeof(uint32_t), 2);
-						void* alloc2 = alloc.Allocate(sizeof(uint32_t), 2);
-						void* alloc3 = alloc.Allocate(sizeof(uint32_t), 2);
-						void* alloc4 = alloc.AllocateBack(sizeof(uint32_t), 2);
-						void* alloc5 = alloc.AllocateBack(sizeof(uint32_t), 2);
-						void* alloc6 = alloc.AllocateBack(sizeof(uint32_t), 2);
+						alloc.Allocate(sizeof(uint32_t), 2);
+						alloc.Allocate(sizeof(uint32_t), 2);
+						alloc.Allocate(sizeof(uint32_t), 2);
+						alloc.AllocateBack(sizeof(uint32_t), 2);
+						alloc.AllocateBack(sizeof(uint32_t), 2);
+						alloc.AllocateBack(sizeof(uint32_t), 2);
 						alloc.Reset();
 						return alloc.Front() == alloc.Begin()
 							&& alloc.Back() == alloc.End();
@@ -565,39 +566,57 @@ int main()
 #ifndef _DEBUG
 		{
 			{
-				DoubleEndedStackAllocator alloc(sizeof(uint32_t) * 3 + 2 * DoubleEndedStackAllocator::GetCanaraySize() + DoubleEndedStackAllocator::GetMetaSize());
-				Tests::Test_Case_Failure("Verfiy fail on Overlap", [&alloc]()
+				DoubleEndedStackAllocator alloc(sizeof(uint32_t) * 3 + 6 * DoubleEndedStackAllocator::GetCanaraySize() + 3 * DoubleEndedStackAllocator::GetMetaSize());
+				Tests::Test_Case_Failure("Verfiy fail on Front Overlaps Back", [&alloc]()
 				{
-					void* alloc1 = alloc.AllocateBack(sizeof(uint32_t), 1);
-					void* alloc2 = alloc.AllocateBack(sizeof(uint32_t), 1);
-					void* alloc3 = alloc.Allocate(sizeof(uint32_t), 1);
+					alloc.AllocateBack(sizeof(uint32_t), 1);
+					alloc.AllocateBack(sizeof(uint32_t), 1);
+					alloc.Allocate(sizeof(uint32_t), 1);
 					void* alloc4 = alloc.Allocate(sizeof(uint32_t), 1);
 					return alloc4 != nullptr;
 				}());
 			}
 			{
-				DoubleEndedStackAllocator alloc(sizeof(short));
-				Tests::Test_Case_Failure("Verfiy fail on Overlap", [&alloc]()
+				DoubleEndedStackAllocator alloc(sizeof(uint32_t));
+				Tests::Test_Case_Failure("Verfiy fail on Front Oversize", [&alloc]()
 				{
+					void* alloc1 = alloc.Allocate(sizeof(uint64_t), 1);
+					return alloc1 != nullptr;
+				}());
+			}
+			{
+				DoubleEndedStackAllocator alloc(sizeof(uint32_t) * 2);
+				Tests::Test_Case_Failure("Verfiy fail on Front Overlaps End (MultiAlloc)", [&alloc]()
+				{
+					alloc.Allocate(sizeof(uint32_t), 1);
 					void* alloc1 = alloc.Allocate(sizeof(uint32_t), 1);
 					return alloc1 != nullptr;
 				}());
 			}
 			{
-				DoubleEndedStackAllocator alloc(sizeof(uint32_t) * 3 + 2 * DoubleEndedStackAllocator::GetCanaraySize() + DoubleEndedStackAllocator::GetMetaSize());
-				Tests::Test_Case_Failure("Verfiy fail on Back Overlap", [&alloc]()
+				DoubleEndedStackAllocator alloc(sizeof(uint32_t) * 3 + 6 * DoubleEndedStackAllocator::GetCanaraySize() + 3 * DoubleEndedStackAllocator::GetMetaSize());
+				Tests::Test_Case_Failure("Verfiy fail on Back Overlaps Front", [&alloc]()
 				{
-					void* alloc1 = alloc.Allocate(sizeof(uint32_t), 1);
-					void* alloc2 = alloc.Allocate(sizeof(uint32_t), 1);
-					void* alloc3 = alloc.AllocateBack(sizeof(uint32_t), 1);
+					alloc.Allocate(sizeof(uint32_t), 1);
+					alloc.Allocate(sizeof(uint32_t), 1);
+					alloc.AllocateBack(sizeof(uint32_t), 1);
 					void* alloc4 = alloc.AllocateBack(sizeof(uint32_t), 1);
 					return alloc4 != nullptr;
 				}());
 			}
 			{
 				DoubleEndedStackAllocator alloc(sizeof(short));
-				Tests::Test_Case_Failure("Verfiy fail on Overlap", [&alloc]()
+				Tests::Test_Case_Failure("Verfiy fail on back Oversize", [&alloc]()
 				{
+					void* alloc1 = alloc.AllocateBack(sizeof(uint32_t), 1);
+					return alloc1 != nullptr;
+				}());
+			}
+			{
+				DoubleEndedStackAllocator alloc(sizeof(uint32_t) * 2);
+				Tests::Test_Case_Failure("Verfiy fail on Back Overlaps Begin (MultiAlloc)", [&alloc]()
+				{
+					alloc.AllocateBack(sizeof(uint32_t), 1);
 					void* alloc1 = alloc.AllocateBack(sizeof(uint32_t), 1);
 					return alloc1 != nullptr;
 				}());
