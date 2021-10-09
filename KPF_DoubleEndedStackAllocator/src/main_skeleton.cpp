@@ -215,9 +215,15 @@ public:
 
 	void Reset(void)
 	{
-		mFront = mBegin;
-		mBack = mEnd;
-		// TODO: while Free()
+		while (mNumFrontAllocs != 0)
+		{
+			Free(reinterpret_cast<void*>(mFront));
+		}
+
+		while (mNumBackAllocs != 0)
+		{
+			FreeBack(reinterpret_cast<void*>(mBack));
+		}
 	}
 
 	const void* Begin()
@@ -537,6 +543,21 @@ int main()
 						alloc.FreeBack(alloc2);
 						alloc.FreeBack(alloc1);
 						return alloc.Back() == alloc.End();
+					}());
+			}
+			{
+				DoubleEndedStackAllocator alloc(1024U);
+				Tests::Test_Case_Success("Verify Reset Success", [&alloc]()
+					{
+						void* alloc1 = alloc.Allocate(sizeof(uint32_t), 2);
+						void* alloc2 = alloc.Allocate(sizeof(uint32_t), 2);
+						void* alloc3 = alloc.Allocate(sizeof(uint32_t), 2);
+						void* alloc4 = alloc.AllocateBack(sizeof(uint32_t), 2);
+						void* alloc5 = alloc.AllocateBack(sizeof(uint32_t), 2);
+						void* alloc6 = alloc.AllocateBack(sizeof(uint32_t), 2);
+						alloc.Reset();
+						return alloc.Front() == alloc.Begin()
+							&& alloc.Back() == alloc.End();
 					}());
 			}
 		}
