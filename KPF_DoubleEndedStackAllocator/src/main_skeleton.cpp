@@ -13,10 +13,12 @@
 **/
 
 #include "stdio.h"
-
+#include "inttypes.h"
 #include <stdlib.h>
 #include <cassert>
 #include <cstdint>
+#include <string>
+#include <malloc.h>
 
 namespace Tests
 {
@@ -66,54 +68,86 @@ class DoubleEndedStackAllocator
 {
 public:
 	DoubleEndedStackAllocator(size_t max_size)
+		: mNumFrontAllocs(0)
+		, mNumBackAllocs(0)
 	{
 		// TODO:
 		//	- VirtualAlloc
 		//	- check if begin and end are clean?
 
+		static_assert(sizeof(size_t) == sizeof(uintptr_t), "Size mismatch of size_t and uintptr_t");
+
 		// reserve memory
-		mBegin = reinterpret_cast<uintptr_t>(malloc(max_size));
-		mEnd = mBegin + max_size;
+		mBegin = mFront = reinterpret_cast<uintptr_t>(malloc(max_size));
+		mEnd = mBack = mBegin + max_size;
 
 		#ifdef WITH_DEBUG_OUTPUT
-			printf("constructed allocator from \n[%llx] to\n[%llx]\n", mBegin, mEnd);
-			printf("size: [%llu]\n", max_size);
-			printf("diff: [%llu]\n", mEnd - mBegin);
+			printf("constructed allocator from \n[%" PRIxPTR "] to\n[%" PRIxPTR "]\n", mBegin, mEnd);
+			printf("size: [%" PRIxPTR "]\n", max_size);
+			printf("diff: [%" PRIxPTR "]\n", mEnd - mBegin);
 		#endif
 	}
 
 	void* Allocate(size_t size, size_t alignment)
 	{
 		assert(IsPowerOf2(alignment));
-		// TODO: return nullptr if failed
 
-		// TODO: align
+		uintptr_t lastItem = mFront;
 
-		return nullptr;
+		if (mNumFrontAllocs != 0)
+		{
+			MetaData* meta = reinterpret_cast<MetaData*>(mFront - META_SIZE);
+			mFront = mFront + meta->Size + CANARY_SIZE;
+		}
+
+		uintptr_t alignedAddress = AlignUp(mFront, alignment);
+		if ((alignedAddress + size + CANARY_SIZE) > (mBack - META_SIZE - CANARY_SIZE))
+		{
+			assert(!"Front Stack overlaps with Back Stack");
+			return nullptr;
+		}
+		mFront = alignedAddress;
+		WriteBeginCanary(alignedAddress);
+		WriteMeta(alignedAddress, lastItem, size);
+		WriteEndCanary(alignedAddress, size);
+		
+		++mNumFrontAllocs;
+		
+		return reinterpret_cast<void*>(mFront);
 	}
 	void* AllocateBack(size_t size, size_t alignment)
 	{
+		assert(IsPowerOf2(alignment));
+		mBack -= size + 2 * CANARY_SIZE + META_SIZE;
+		++mNumBackAllocs;
 		return nullptr;
 	}
 
 	void Free(void* memory)
 	{
+		mFront = mFront + (mFront - reinterpret_cast<uintptr_t>(memory));
 		// TODO: check if pointer is valid?
 
 		// TODO: reposition pointer and free memory
 	}
 
-	void FreeBack(void* memory) {}
+	void FreeBack(void* memory)
+	{
+		mBack = mBack + (mBack - reinterpret_cast<uintptr_t>(memory));
+	}
 
 	void Reset(void)
 	{
+		mFront = mBegin;
+		mBack = mEnd;
 		// TODO: while Free()
 	}
 
 	~DoubleEndedStackAllocator(void)
 	{
-		// give reserved memory back to system
-		free((void *)mBegin);
+		Reset();
+		free(reinterpret_cast<void*>(mBegin));
+		// TODO: give reserved memory back to system
 	}
 
 private:
@@ -123,14 +157,47 @@ private:
 		return val > 0 && !(val & (val - 1));
 	}
 
+	void WriteBeginCanary(uintptr_t alignedAddress)
+	{
 #ifdef WITH_DEBUG_CANARIES
-	const ptrdiff_t CANARY_SIZE = 4;
+		uintptr_t canaryAddress = alignedAddress - META_SIZE - CANARY_SIZE;
+		*reinterpret_cast<uint32_t*>(canaryAddress) = CANARY;
+#endif
+	}
+
+	void WriteEndCanary(uintptr_t alignedAddress, size_t size)
+	{
+#ifdef WITH_DEBUG_CANARIES
+		uintptr_t canaryAddress = alignedAddress + size;
+		*reinterpret_cast<uint32_t*>(canaryAddress) = CANARY;
+#endif
+	}
+
+	void WriteMeta(uintptr_t alignedAddress, uintptr_t lastItem, size_t allocatedSize)
+	{
+		uintptr_t metaAddress = alignedAddress - META_SIZE;
+		*reinterpret_cast<MetaData*>(metaAddress) = MetaData(lastItem, allocatedSize);
+	}
+
+	struct MetaData
+	{
+		MetaData(uintptr_t lastItem, size_t size)
+			: LastItem(lastItem)
+			, Size(size)
+		{
+		}
+		uintptr_t LastItem;
+		size_t Size;
+	};
+	const ptrdiff_t META_SIZE = sizeof(MetaData);
+	//const uint32_t CANARY = 0xDEADC0DE;
+	const uint32_t CANARY = 0xDEC0ADDE;
+
+#ifdef WITH_DEBUG_CANARIES
+	const ptrdiff_t CANARY_SIZE = sizeof(CANARY);
 #else
 	const ptrdiff_t CANARY_SIZE = 0;
 #endif
-
-	const ptrdiff_t META_SIZE = 4; // contains allocated space size
-	const uint32_t CANARY = 0xDEADC0DE;
 
 	//					|	|	|	|
 	//					4	8	12	16
@@ -162,10 +229,16 @@ private:
 	// --> (B)
 	uintptr_t mFront;
 	uintptr_t mBack;
+	
+	uint32_t mNumFrontAllocs;
+	uint32_t mNumBackAllocs;
 
-	uintptr_t AlignUp()
+	uintptr_t AlignUp(uintptr_t current, size_t alignment)
 	{
-		return 0x0;
+		size_t aligment_mask = ~(alignment - 1);
+		size_t offset = CANARY_SIZE + META_SIZE;
+		uintptr_t aligned_address = (offset + current + alignment) & aligment_mask;
+		return aligned_address;
 	}
 
 	uintptr_t AlignDown()
@@ -190,31 +263,40 @@ int main()
 {
 	// You can add your own tests here, I will call my tests at then end with a fresh instance of your allocator and a specific max_size
 	{
+		// Success tests
 		{
-			DoubleEndedStackAllocator allocator(1);
+			{
+				DoubleEndedStackAllocator alloc(64U);
+				Tests::Test_Case_Success("Verify Allocation Success: ", [&alloc]()
+				{
+					return alloc.Allocate(sizeof(uint32_t), 1) != nullptr;
+				}());
+			}
+			{
+				DoubleEndedStackAllocator alloc(1024U);
+				Tests::Test_Case_Success("Verify Allocation Alignment: ", [&alloc]()
+				{
+					bool ret = true;
+					ret &= reinterpret_cast<uintptr_t>(alloc.Allocate(sizeof(uint32_t), 2)) % 2 == 0;
+					ret &= reinterpret_cast<uintptr_t>(alloc.Allocate(sizeof(uint32_t), 8)) % 8 == 0;
+					ret &= reinterpret_cast<uintptr_t>(alloc.Allocate(sizeof(uint32_t), 64)) % 64 == 0;
+					return ret;
+				}());
+			}
+		}
+		// Fail tests
+		{
+			{
+
+			}
 		}
 
-		// You can remove this, just showcasing how the test functions can be used
-		DoubleEndedStackAllocator allocator(1024u);
-		Tests::Test_Case_Success("Allocate() returns nullptr", [&allocator](){ return allocator.Allocate(32, 1) == nullptr; }());
-
+		// Assert tests
 		{
-			// TODO: temp tests, remove
-			// success
-			printf("allocator.Allocate(0, 1)...\n");
-			allocator.Allocate(0, 1);
-			printf("allocator.Allocate(0, 2)...\n");
-			allocator.Allocate(0, 2);
+			{
 
-			// fail
-			#ifndef _DEBUG
-				printf("allocator.Allocate(0, 0)...\n");
-				allocator.Allocate(0, 0);
-				printf("allocator.Allocate(0, 3)...\n");
-				allocator.Allocate(0, 3);
-			#endif
+			}
 		}
-
 	}
 
 	// You can do whatever you want here in the main function
