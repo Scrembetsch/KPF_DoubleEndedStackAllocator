@@ -136,7 +136,7 @@ public:
 		if (mNumBackAllocs != 0)
 		{
 			MetaData* meta = reinterpret_cast<MetaData*>(mBack - META_SIZE);
-			mBack = mBack - meta->Size - CANARY_SIZE;
+			mBack = mBack - META_SIZE - CANARY_SIZE;
 		}
 
 		uintptr_t alignedAddress = AlignDown(mBack, alignment, size);
