@@ -1,7 +1,7 @@
 /**
 * Exercise: "DoubleEndedStackAllocator with Canaries" OR "Growing DoubleEndedStackAllocator with Canaries (VMEM)"
 * Group members: Handl Anja (gs20m005), Tributsch Harald (gs20m008), Leithner Michael (gs20m012)
-* 
+*
 * open issues:
 * ============
 * - virtual memory allocation for growing VMEM
@@ -70,16 +70,15 @@ public:
 //#define HTL_WITH_DEBUG_OUTPUT
 
 	DoubleEndedStackAllocator(size_t max_size)
-		: mNumFrontAllocs(0)
-		, mNumBackAllocs(0)
 	{
 		// TODO:
 		//	- VirtualAlloc
 		//	- check if begin and end are clean?
 
+		// TODO: Do we need this?
 		static_assert(sizeof(size_t) == sizeof(uintptr_t), "Size mismatch of size_t and uintptr_t");
 
-		// reserve memory
+		// Reserve Memory and init Pointers
 		mBegin = mFront = reinterpret_cast<uintptr_t>(malloc(max_size));
 		mEnd = mBack = mBegin + max_size;
 
@@ -90,6 +89,13 @@ public:
 		#endif
 	}
 
+	~DoubleEndedStackAllocator(void)
+	{
+		Reset();
+		free(reinterpret_cast<void*>(mBegin));
+		// TODO: give reserved memory back to system
+	}
+
 	void* Allocate(size_t size, size_t alignment)
 	{
 		assert(IsPowerOf2(alignment));
@@ -97,7 +103,8 @@ public:
 		uintptr_t lastItem = mFront;
 		uintptr_t newFront = mFront;
 
-		if (mNumFrontAllocs != 0)
+		// Jump to next free address -> If Front == Begin -> Front is free address
+		if (mFront != mBegin)
 		{
 			MetaData* meta = reinterpret_cast<MetaData*>(mFront - META_SIZE);
 			newFront = mFront + meta->Size + CANARY_SIZE;
@@ -105,8 +112,11 @@ public:
 
 		uintptr_t alignedAddress = AlignUp(newFront + CANARY_SIZE + META_SIZE, alignment);
 
+		// Check if front allocation would overlap with back allocation
 		bool overlap = false;
-		if (mNumBackAllocs == 0)
+
+		// Case when there are no back allocation
+		if (mBack == mEnd)
 		{
 			overlap |= (alignedAddress + size + CANARY_SIZE) >= mBack;
 		}
@@ -118,33 +128,36 @@ public:
 		if (overlap)
 		{
 			assert(!"Front Stack overlaps with Back Stack");
+			//printf("[Warning]: Front Stack overlaps with Back Stack!\n");
 			return nullptr;
 		}
+
 		mFront = alignedAddress;
 		WriteBeginCanary(alignedAddress);
 		WriteMeta(alignedAddress, lastItem, size);
 		WriteEndCanary(alignedAddress, size);
-		
-		++mNumFrontAllocs;
-		
+
 		return reinterpret_cast<void*>(mFront);
 	}
+
 	void* AllocateBack(size_t size, size_t alignment)
 	{
 		assert(IsPowerOf2(alignment));
-		
+
 		uintptr_t lastItem = mBack;
 		uintptr_t newBack = mBack - size - CANARY_SIZE;
 
-		if (mNumBackAllocs != 0)
+		// Jump to next free address -> If Back == End-> Back is free address
+		if (mEnd != mBack)
 		{
 			newBack = mBack - META_SIZE - 2 * CANARY_SIZE - size;
 		}
 
 		uintptr_t alignedAddress = AlignDown(newBack, alignment);
 
+		// Check if back allocation would overlap with front allocation
 		bool overlap = false;
-		if (mNumFrontAllocs == 0)
+		if (mFront == mBegin)
 		{
 			overlap |= mBack - META_SIZE - CANARY_SIZE <= mFront;
 		}
@@ -156,6 +169,7 @@ public:
 		if (overlap)
 		{
 			assert(!"Back Stack overlaps with Front Stack");
+			//printf("[Warning]: Back Stack overlaps with Front Stack!\n");
 			return nullptr;
 		}
 
@@ -163,8 +177,6 @@ public:
 		WriteBeginCanary(alignedAddress);
 		WriteMeta(alignedAddress, lastItem, size);
 		WriteEndCanary(alignedAddress, size);
-
-		++mNumBackAllocs;
 
 		return reinterpret_cast<void*>(mBack);
 	}
@@ -180,6 +192,7 @@ public:
 		if (reinterpret_cast<uintptr_t>(memory) != mFront)
 		{
 			assert(!"Pointer doesn't match last allocated memory, couldn't free memory");
+			//printf("[Warning]: Pointer doesn't match last allocated memory, couldn't free memory!\n");
 			return;
 		}
 
@@ -189,7 +202,6 @@ public:
 
 		// We don't care what the user has written in the memory, therefore we just set the Front to the LastItem and "ignore" the previously allocated memory
 		mFront = currentMetadata->LastItem;
-		mNumFrontAllocs--;
 	}
 
 	void FreeBack(void* memory)
@@ -203,6 +215,7 @@ public:
 		if (reinterpret_cast<uintptr_t>(memory) != mBack)
 		{
 			assert(!"Pointer doesn't match last allocated memory, couldn't free memory");
+			//printf("[Warning]: Pointer doesn't match last allocated memory, couldn't free memory!\n");
 			return;
 		}
 
@@ -212,22 +225,26 @@ public:
 
 		// We don't care what the user has written in the memory, therefore we just set the Back to the LastItem and "ignore" the previously allocated memory
 		mBack = currentMetadata->LastItem;
-		mNumBackAllocs--;
 	}
 
 	void Reset(void)
 	{
-		while (mNumFrontAllocs != 0)
+		while (mFront != mBegin)
 		{
 			Free(reinterpret_cast<void*>(mFront));
 		}
 
-		while (mNumBackAllocs != 0)
+		while (mBack != mEnd)
 		{
 			FreeBack(reinterpret_cast<void*>(mBack));
 		}
+
+		// Fast way would be:
+		// mFront = mBegin;
+		// mBack = mEnd;
 	}
 
+	// Things needed for testing
 	const void* Begin()
 	{
 		return reinterpret_cast<void*>(mBegin);
@@ -258,13 +275,6 @@ public:
 		return META_SIZE;
 	}
 
-	~DoubleEndedStackAllocator(void)
-	{
-		Reset();
-		free(reinterpret_cast<void*>(mBegin));
-		// TODO: give reserved memory back to system
-	}
-
 private:
 	// power of 2 always has exactly 1 bit set in binary representation (for signed values)
 	bool IsPowerOf2(size_t val)
@@ -272,6 +282,7 @@ private:
 		return val > 0 && !(val & (val - 1));
 	}
 
+	// Empty canary implementations with no variable names to get it to compile on Linux with -Wall -Werror
 #ifdef WITH_DEBUG_CANARIES
 	void WriteBeginCanary(uintptr_t alignedAddress)
 	{
@@ -319,14 +330,14 @@ private:
 		if (*reinterpret_cast<uint32_t*>(canaryAddress) != CANARY)
 		{
 			assert(!"Invalid Begin Canary");
-			printf("[Warning]: Invalid Front Canary!\n");
+			//printf("[Warning]: Invalid Front Canary!\n");
 		}
 		// Check End Canary
 		canaryAddress = alignedAddress + size;
 		if (*reinterpret_cast<uint32_t*>(canaryAddress) != CANARY)
 		{
 			assert(!"Invalid End Canary");
-			printf("[Warning]: Invalid End Canary!\n");
+			//printf("[Warning]: Invalid End Canary!\n");
 		}
 	}
 #else
@@ -349,6 +360,7 @@ private:
 		uintptr_t LastItem;
 		size_t Size;
 	};
+
 	static const ptrdiff_t META_SIZE = sizeof(MetaData);
 	//const uint32_t CANARY = 0xDEADC0DE;
 
@@ -365,7 +377,7 @@ private:
 
 	// [Begin... [0xCD] <meta>Front, <meta>Front......, <meta>Back, [0xCD] ... End] <- memalloc (VirtualAlloc)
 
-	// first reservation 
+	// first reservation
 	// [Begin...															... End]
 
 	// allocate
@@ -377,7 +389,7 @@ private:
 	// free
 	// [Begin, [0xCD], <meta>Front, [0xCD], ...								... End]
 	//									    ^
-	
+
 	// allocateBack
 	// [Begin, [0xCD], <meta>Front, [0xCD], ... [0xCD], <meta>Back, [0xCD]	... End]
 
@@ -389,9 +401,6 @@ private:
 	// --> (B)
 	uintptr_t mFront;
 	uintptr_t mBack;
-	
-	uint32_t mNumFrontAllocs;
-	uint32_t mNumBackAllocs;
 
 	uintptr_t AlignUp(uintptr_t address, size_t alignment)
 	{
@@ -415,8 +424,6 @@ private:
 	{
 		return reinterpret_cast<MetaData*>(allocSpacePtr - META_SIZE);
 	}
-
-#undef HTL_WITH_DEBUG_OUTPUT
 };
 /** TODO
 * - reserve (virtual?) memory to be able to grow
