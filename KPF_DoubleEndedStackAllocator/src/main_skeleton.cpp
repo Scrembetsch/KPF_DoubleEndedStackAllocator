@@ -12,24 +12,26 @@
 *		Anja
 **/
 
-#include "stdio.h"
-#include "inttypes.h"
-#include <stdlib.h>
 #include <cassert>
-#include <cstdint>
-#include <string>
+#include <iostream>
+
 #include <malloc.h>
+//#include <unordered_set> // used for setup a set to test invalid aligns
+
+#define ANSI_COLOR_RED     "\x1b[31m"
+#define ANSI_COLOR_GREEN   "\x1b[32m"
+#define ANSI_COLOR_RESET   "\x1b[0m"
 
 namespace Tests
 {
 	void Test_Case_Success(const char* name, bool passed)
 	{
-		printf("[%s] %s the test!\n", name, passed ? "passed" : "failed");
+		printf("[%s] %s" ANSI_COLOR_RESET " the test!\n", name, passed ? ANSI_COLOR_GREEN "passed" : ANSI_COLOR_RED "failed");
 	}
 
 	void Test_Case_Failure(const char* name, bool passed)
 	{
-		printf("[%s] %s the test!\n", name, !passed ? "passed" : "failed");
+		printf("[%s] %s" ANSI_COLOR_RESET " the test!\n", name, !passed ? ANSI_COLOR_GREEN "passed" : ANSI_COLOR_RED "failed");
 	}
 
 	/**
@@ -44,7 +46,7 @@ namespace Tests
 		void* mem = allocator.Allocate(size, alignment);
 		if (mem == nullptr)
 		{
-			printf("[Error]: Allocator returned nullptr!\n");
+			printf(ANSI_COLOR_RED "[Error]" ANSI_COLOR_RESET ": Allocator returned nullptr!\n");
 			return false;
 		}
 
@@ -54,9 +56,14 @@ namespace Tests
 
 // Assignment functionality tests are going to be included here
 
-#define WITH_DEBUG_CANARIES
+#define WITH_DEBUG_CANARIES		0	// using extra space for canaries
+#define HTL_WITH_DEBUG_OUTPUT	0	// debug output
+#define HTL_PREVENT_COPY		1	// prevent copy ctor and operator
+#define HTL_PREVENT_MOVE		1	// prevent move ctor and operator
+
 //#undef assert
 //#define assert(arg)
+
 /**
 * You work on your DoubleEndedStackAllocator. Stick to the provided interface, this is
 * necessary for testing your assignment in the end. Don't remove or rename the public
@@ -67,8 +74,6 @@ namespace Tests
 class DoubleEndedStackAllocator
 {
 public:
-//#define HTL_WITH_DEBUG_OUTPUT
-
 	DoubleEndedStackAllocator(size_t max_size)
 	{
 		// TODO:
@@ -79,26 +84,39 @@ public:
 		static_assert(sizeof(size_t) == sizeof(uintptr_t), "Size mismatch of size_t and uintptr_t");
 
 		// Reserve Memory and init Pointers
-		mBegin = mFront = reinterpret_cast<uintptr_t>(malloc(max_size));
+		void* begin = malloc(max_size);
+		if (!begin)
+		{
+			printf(ANSI_COLOR_RED "[Error]" ANSI_COLOR_RESET ": Not enough memory to construct!\n");
+			throw std::bad_alloc();
+		}
+
+		mBegin = mFront = reinterpret_cast<uintptr_t>(begin);
 		mEnd = mBack = mBegin + max_size;
 
-		#ifdef HTL_WITH_DEBUG_OUTPUT
-			printf("constructed allocator from \n[%" PRIxPTR "] to\n[%" PRIxPTR "]\n", mBegin, mEnd);
-			printf("size: [%" PRIxPTR "]\n", max_size);
-			printf("diff: [%" PRIxPTR "]\n", mEnd - mBegin);
+		#if HTL_WITH_DEBUG_OUTPUT
+			printf("constructed allocator from \n[%llx] to\n[%llx]\n", mBegin, mEnd);
+			printf("size: [%zu]\n", max_size);
+			printf("diff: [%llu]\n", mEnd - mBegin);
 		#endif
 	}
 
 	~DoubleEndedStackAllocator(void)
 	{
 		Reset();
-		free(reinterpret_cast<void*>(mBegin));
+
 		// TODO: give reserved memory back to system
+		void* begin = reinterpret_cast<void*>(mBegin);
+		if (begin) free(begin);
 	}
 
 	void* Allocate(size_t size, size_t alignment)
 	{
-		assert(IsPowerOf2(alignment));
+		if (false == IsPowerOf2(alignment))
+		{
+			assert(!"alignment musst be a power of 2!");
+			return nullptr;
+		}
 
 		uintptr_t lastItem = mFront;
 		uintptr_t newFront = mFront;
@@ -142,7 +160,11 @@ public:
 
 	void* AllocateBack(size_t size, size_t alignment)
 	{
-		assert(IsPowerOf2(alignment));
+		if (false == IsPowerOf2(alignment))
+		{
+			assert(!"alignment musst be a power of 2!");
+			return nullptr;
+		}
 
 		uintptr_t lastItem = mBack;
 		uintptr_t newBack = mBack - size - CANARY_SIZE;
@@ -183,7 +205,7 @@ public:
 
 	void Free(void* memory)
 	{
-		if (!ValidateMemoryPoiter(memory))
+		if (!ValidateMemoryPointer(memory))
 		{
 			return;
 		}
@@ -206,7 +228,7 @@ public:
 
 	void FreeBack(void* memory)
 	{
-		if (!ValidateMemoryPoiter(memory))
+		if (!ValidateMemoryPointer(memory))
 		{
 			return;
 		}
@@ -276,6 +298,20 @@ public:
 	}
 
 private:
+#if HTL_PREVENT_COPY
+	// prevent copies because default cause error (TODO: implement custom?)
+	DoubleEndedStackAllocator(const DoubleEndedStackAllocator&);
+
+	DoubleEndedStackAllocator& operator = (const DoubleEndedStackAllocator&);
+#endif
+
+#if HTL_PREVENT_MOVE
+	// prevent move because default cause error (TODO: implement custom?)
+	DoubleEndedStackAllocator(const DoubleEndedStackAllocator&&);
+
+	DoubleEndedStackAllocator& operator = (const DoubleEndedStackAllocator&&);
+#endif
+
 	// power of 2 always has exactly 1 bit set in binary representation (for signed values)
 	bool IsPowerOf2(size_t val)
 	{
@@ -283,7 +319,7 @@ private:
 	}
 
 	// Empty canary implementations with no variable names to get it to compile on Linux with -Wall -Werror
-#ifdef WITH_DEBUG_CANARIES
+#if WITH_DEBUG_CANARIES
 	void WriteBeginCanary(uintptr_t alignedAddress)
 	{
 		uintptr_t canaryAddress = alignedAddress - META_SIZE - CANARY_SIZE;
@@ -293,7 +329,7 @@ private:
 	void WriteBeginCanary(uintptr_t){ }
 #endif
 
-#ifdef WITH_DEBUG_CANARIES
+#if WITH_DEBUG_CANARIES
 	void WriteEndCanary(uintptr_t alignedAddress, size_t size)
 	{
 		uintptr_t canaryAddress = alignedAddress + size;
@@ -304,7 +340,7 @@ private:
 #endif
 
 	// Memory Pointer needs to be valid
-	bool ValidateMemoryPoiter(void* memory)
+	bool ValidateMemoryPointer(void* memory)
 	{
 		if (memory == nullptr)
 		{
@@ -320,11 +356,10 @@ private:
 		return true;
 	}
 
-#ifdef WITH_DEBUG_CANARIES
+#if WITH_DEBUG_CANARIES
 	// If Canaries are not valid, we're not allowed to free, because something has overwritten them
 	void CheckCanaries(uintptr_t alignedAddress, size_t size)
 	{
-
 		// Check Begin Canary
 		uintptr_t canaryAddress = alignedAddress - META_SIZE - CANARY_SIZE;
 		if (*reinterpret_cast<uint32_t*>(canaryAddress) != CANARY)
@@ -332,6 +367,7 @@ private:
 			assert(!"Invalid Begin Canary");
 			//printf("[Warning]: Invalid Front Canary!\n");
 		}
+
 		// Check End Canary
 		canaryAddress = alignedAddress + size;
 		if (*reinterpret_cast<uint32_t*>(canaryAddress) != CANARY)
@@ -362,9 +398,9 @@ private:
 	};
 
 	static const ptrdiff_t META_SIZE = sizeof(MetaData);
-	//const uint32_t CANARY = 0xDEADC0DE;
 
-#ifdef WITH_DEBUG_CANARIES
+#if WITH_DEBUG_CANARIES
+	//static const uint32_t CANARY = 0xDEADC0DE;
 	static const uint32_t CANARY = 0xDEC0ADDE;
 	static const ptrdiff_t CANARY_SIZE = sizeof(CANARY);
 #else
@@ -394,24 +430,23 @@ private:
 	// [Begin, [0xCD], <meta>Front, [0xCD], ... [0xCD], <meta>Back, [0xCD]	... End]
 
 	// boundaries of our allocation
-	uintptr_t mBegin;
-	uintptr_t mEnd;
+	uintptr_t mBegin = 0;
+	uintptr_t mEnd = 0;
 
 	// decision: (A) using pointer to next/prev free memory or (B) points to user space begin
 	// --> (B)
-	uintptr_t mFront;
-	uintptr_t mBack;
+	uintptr_t mFront = 0;
+	uintptr_t mBack = 0;
 
 	uintptr_t AlignUp(uintptr_t address, size_t alignment)
 	{
-		if (address % alignment == 0)
+		uintptr_t adjust = address % alignment; // needed adjustment bits
+		if (adjust == 0)
 		{
 			return address;
 		}
-		else
-		{
-			return (address + (alignment - (address % alignment)));
-		}
+		//printf("needed adjustment bits: [%llu]\n\n", adjust);
+		return (address + (alignment - adjust));
 	}
 
 	uintptr_t AlignDown(uintptr_t address, size_t alignment)
@@ -426,8 +461,7 @@ private:
 	}
 };
 /** TODO
-* - reserve (virtual?) memory to be able to grow
-*		AlignUp/Down utility functions
+* - reserve virtual memory to be able to grow
 * - ability to grow
 *		just request new memory and copy?
 * - copy and move ctor/operator?
@@ -440,6 +474,13 @@ int main()
 {
 	// You can add your own tests here, I will call my tests at then end with a fresh instance of your allocator and a specific max_size
 	{
+		// TODO: may define as namespace constants?
+		const size_t canarySize = DoubleEndedStackAllocator::GetCanaraySize();
+		const size_t metaSize = DoubleEndedStackAllocator::GetMetaSize();
+
+		// TODO: max supported alignment?
+		static const size_t maxAlign = 512; // SIZE_MAX;
+
 		// Success tests
 		{
 			{
@@ -458,9 +499,12 @@ int main()
 				Tests::Test_Case_Success("Verify Allocation Alignment", [&alloc]()
 				{
 					bool ret = true;
-					ret &= reinterpret_cast<uintptr_t>(alloc.Allocate(sizeof(uint32_t), 2)) % 2 == 0;
-					ret &= reinterpret_cast<uintptr_t>(alloc.Allocate(sizeof(uint32_t), 8)) % 8 == 0;
-					ret &= reinterpret_cast<uintptr_t>(alloc.Allocate(sizeof(uint32_t), 64)) % 64 == 0;
+					size_t align = 2;
+					while (align < maxAlign)
+					{
+						ret &= reinterpret_cast<uintptr_t>(alloc.Allocate(sizeof(uint32_t), align)) % align == 0;
+						align <<= 1;
+					}
 					return ret;
 				}());
 			}
@@ -495,9 +539,12 @@ int main()
 				Tests::Test_Case_Success("Verify Back Allocation Alignment", [&alloc]()
 				{
 					bool ret = true;
-					ret &= reinterpret_cast<uintptr_t>(alloc.AllocateBack(sizeof(uint32_t), 2)) % 2 == 0;
-					ret &= reinterpret_cast<uintptr_t>(alloc.AllocateBack(sizeof(uint32_t), 8)) % 8 == 0;
-					ret &= reinterpret_cast<uintptr_t>(alloc.AllocateBack(sizeof(uint32_t), 64)) % 64 == 0;
+					size_t align = 2;
+					while (align < maxAlign)
+					{
+						ret &= reinterpret_cast<uintptr_t>(alloc.AllocateBack(sizeof(uint32_t), align)) % align == 0;
+						align <<= 1;
+					}
 					return ret;
 				}());
 			}
@@ -528,52 +575,52 @@ int main()
 			{
 				DoubleEndedStackAllocator alloc(1024U);
 				Tests::Test_Case_Success("Verify FreeBack Success", [&alloc]()
-					{
-						void* ptr = alloc.AllocateBack(sizeof(uint32_t), 1);
-						alloc.FreeBack(ptr);
-						return alloc.Back() == alloc.End();
-					}());
+				{
+					void* ptr = alloc.AllocateBack(sizeof(uint32_t), 1);
+					alloc.FreeBack(ptr);
+					return alloc.Back() == alloc.End();
+				}());
 			}
 			{
 				DoubleEndedStackAllocator alloc(1024U);
 				Tests::Test_Case_Success("Verify Multiple Free Success", [&alloc]()
-					{
-						void* alloc1 = alloc.Allocate(sizeof(uint32_t), 2);
-						void* alloc2 = alloc.Allocate(sizeof(uint32_t), 2);
-						void* alloc3 = alloc.Allocate(sizeof(uint32_t), 2);
-						alloc.Free(alloc3);
-						alloc.Free(alloc2);
-						alloc.Free(alloc1);
-						return alloc.Front() == alloc.Begin();
-					}());
+				{
+					void* alloc1 = alloc.Allocate(sizeof(uint32_t), 2);
+					void* alloc2 = alloc.Allocate(sizeof(uint32_t), 2);
+					void* alloc3 = alloc.Allocate(sizeof(uint32_t), 2);
+					alloc.Free(alloc3);
+					alloc.Free(alloc2);
+					alloc.Free(alloc1);
+					return alloc.Front() == alloc.Begin();
+				}());
 			}
 			{
 				DoubleEndedStackAllocator alloc(1024U);
 				Tests::Test_Case_Success("Verify Multiple FreeBack Success", [&alloc]()
-					{
-						void* alloc1 = alloc.AllocateBack(sizeof(uint32_t), 2);
-						void* alloc2 = alloc.AllocateBack(sizeof(uint32_t), 2);
-						void* alloc3 = alloc.AllocateBack(sizeof(uint32_t), 2);
-						alloc.FreeBack(alloc3);
-						alloc.FreeBack(alloc2);
-						alloc.FreeBack(alloc1);
-						return alloc.Back() == alloc.End();
-					}());
+				{
+					void* alloc1 = alloc.AllocateBack(sizeof(uint32_t), 2);
+					void* alloc2 = alloc.AllocateBack(sizeof(uint32_t), 2);
+					void* alloc3 = alloc.AllocateBack(sizeof(uint32_t), 2);
+					alloc.FreeBack(alloc3);
+					alloc.FreeBack(alloc2);
+					alloc.FreeBack(alloc1);
+					return alloc.Back() == alloc.End();
+				}());
 			}
 			{
 				DoubleEndedStackAllocator alloc(1024U);
 				Tests::Test_Case_Success("Verify Reset Success", [&alloc]()
-					{
-						alloc.Allocate(sizeof(uint32_t), 2);
-						alloc.Allocate(sizeof(uint32_t), 2);
-						alloc.Allocate(sizeof(uint32_t), 2);
-						alloc.AllocateBack(sizeof(uint32_t), 2);
-						alloc.AllocateBack(sizeof(uint32_t), 2);
-						alloc.AllocateBack(sizeof(uint32_t), 2);
-						alloc.Reset();
-						return alloc.Front() == alloc.Begin()
-							&& alloc.Back() == alloc.End();
-					}());
+				{
+					alloc.Allocate(sizeof(uint32_t), 2);
+					alloc.Allocate(sizeof(uint32_t), 2);
+					alloc.Allocate(sizeof(uint32_t), 2);
+					alloc.AllocateBack(sizeof(uint32_t), 2);
+					alloc.AllocateBack(sizeof(uint32_t), 2);
+					alloc.AllocateBack(sizeof(uint32_t), 2);
+					alloc.Reset();
+					return alloc.Front() == alloc.Begin()
+						&& alloc.Back() == alloc.End();
+				}());
 			}
 			{
 				DoubleEndedStackAllocator alloc(1024U);
@@ -616,12 +663,53 @@ int main()
 				}());
 			}
 		}
+
 		// Fail tests
 #ifndef _DEBUG
 		{
 			{
-				DoubleEndedStackAllocator alloc(sizeof(uint32_t) * 3 + 6 * DoubleEndedStackAllocator::GetCanaraySize() + 3 * DoubleEndedStackAllocator::GetMetaSize());
-				Tests::Test_Case_Failure("Verfiy fail on Front Overlaps Back", [&alloc]()
+				Tests::Test_Case_Failure("Verify fail on memory allocation", []()
+				{
+					try
+					{
+						DoubleEndedStackAllocator alloc(SIZE_MAX);
+						return true;
+					}
+					catch (...) {}
+					return false;
+				}());
+			}
+			{
+				DoubleEndedStackAllocator alloc(1024U);
+				Tests::Test_Case_Failure("Verify fail on invalid align", [&alloc]()
+				{
+					// TODO: static hash_set (or build dynamic depending on maxAlign)
+					// -> but would need to include unordered_set.h only for one test
+					//std::unordered_set<size_t> s{ 1, 2, 4, 8, 16, 32, 64, 128, 256, 512 };
+
+					bool ret = true;
+					void* mem = nullptr;
+					size_t align = 0;
+					while (align < maxAlign)
+					{
+						//if (1 == s.count(align)) {}
+						if (align == 1 || align == 2 || align == 4 || align == 8 || align == 16 ||
+							align == 32 || align == 64 || align == 128 || align == 256 || align == 512) {}
+						else
+						{
+							mem = alloc.Allocate(sizeof(uint32_t), align);
+							ret &= (mem == nullptr);
+
+							if (false == ret) return true;
+						}
+						align++;
+					}
+					return !ret;
+				}());
+			}
+			{
+				DoubleEndedStackAllocator alloc(sizeof(uint32_t) * 3 + 6 * canarySize + 3 * metaSize);
+				Tests::Test_Case_Failure("Verify fail on Front Overlaps Back", [&alloc]()
 				{
 					alloc.AllocateBack(sizeof(uint32_t), 1);
 					alloc.AllocateBack(sizeof(uint32_t), 1);
@@ -632,7 +720,7 @@ int main()
 			}
 			{
 				DoubleEndedStackAllocator alloc(sizeof(uint32_t));
-				Tests::Test_Case_Failure("Verfiy fail on Front Oversize", [&alloc]()
+				Tests::Test_Case_Failure("Verify fail on Front Oversize", [&alloc]()
 				{
 					void* alloc1 = alloc.Allocate(sizeof(uint64_t), 1);
 					return alloc1 != nullptr;
@@ -640,7 +728,7 @@ int main()
 			}
 			{
 				DoubleEndedStackAllocator alloc(sizeof(uint32_t) * 2);
-				Tests::Test_Case_Failure("Verfiy fail on Front Overlaps End (MultiAlloc)", [&alloc]()
+				Tests::Test_Case_Failure("Verify fail on Front Overlaps End (MultiAlloc)", [&alloc]()
 				{
 					alloc.Allocate(sizeof(uint32_t), 1);
 					void* alloc1 = alloc.Allocate(sizeof(uint32_t), 1);
@@ -648,8 +736,8 @@ int main()
 				}());
 			}
 			{
-				DoubleEndedStackAllocator alloc(sizeof(uint32_t) * 3 + 6 * DoubleEndedStackAllocator::GetCanaraySize() + 3 * DoubleEndedStackAllocator::GetMetaSize());
-				Tests::Test_Case_Failure("Verfiy fail on Back Overlaps Front", [&alloc]()
+				DoubleEndedStackAllocator alloc(sizeof(uint32_t) * 3 + 6 * canarySize + 3 * metaSize);
+				Tests::Test_Case_Failure("Verify fail on Back Overlaps Front", [&alloc]()
 				{
 					alloc.Allocate(sizeof(uint32_t), 1);
 					alloc.Allocate(sizeof(uint32_t), 1);
@@ -660,7 +748,7 @@ int main()
 			}
 			{
 				DoubleEndedStackAllocator alloc(sizeof(short));
-				Tests::Test_Case_Failure("Verfiy fail on back Oversize", [&alloc]()
+				Tests::Test_Case_Failure("Verify fail on back Oversize", [&alloc]()
 				{
 					void* alloc1 = alloc.AllocateBack(sizeof(uint32_t), 1);
 					return alloc1 != nullptr;
@@ -668,7 +756,7 @@ int main()
 			}
 			{
 				DoubleEndedStackAllocator alloc(sizeof(uint32_t) * 2);
-				Tests::Test_Case_Failure("Verfiy fail on Back Overlaps Begin (MultiAlloc)", [&alloc]()
+				Tests::Test_Case_Failure("Verify fail on Back Overlaps Begin (MultiAlloc)", [&alloc]()
 				{
 					alloc.AllocateBack(sizeof(uint32_t), 1);
 					void* alloc1 = alloc.AllocateBack(sizeof(uint32_t), 1);
@@ -678,90 +766,90 @@ int main()
 			{
 				DoubleEndedStackAllocator alloc(1024U);
 				Tests::Test_Case_Failure("Verify fail on free of invalid memory pointer (nullptr)", [&alloc]()
-					{
-						void* ptr = alloc.Allocate(sizeof(uint32_t), 1);
-						alloc.Free(nullptr);
-						return ptr != alloc.Front();
-					}());
+				{
+					void* ptr = alloc.Allocate(sizeof(uint32_t), 1);
+					alloc.Free(nullptr);
+					return ptr != alloc.Front();
+				}());
 			}
 			{
 				DoubleEndedStackAllocator alloc(1024U);
 				Tests::Test_Case_Failure("Verify fail on free of invalid memory pointer (OutOfBounds)", [&alloc]()
-					{
-						void* ptr = alloc.Allocate(sizeof(uint32_t), 1);
-						void* helper = ptr;
-						helper = reinterpret_cast<void*>(reinterpret_cast<uintptr_t>(helper) + 1);
-						alloc.Free(helper);
-						return ptr != alloc.Front();
-					}());
+				{
+					void* ptr = alloc.Allocate(sizeof(uint32_t), 1);
+					void* helper = ptr;
+					helper = reinterpret_cast<void*>(reinterpret_cast<uintptr_t>(helper) + 1);
+					alloc.Free(helper);
+					return ptr != alloc.Front();
+				}());
 			}
 			{
 				DoubleEndedStackAllocator alloc(1024U);
 				Tests::Test_Case_Failure("Verify fail on free of invalid memory pointer (LIFO Validation)", [&alloc]()
-					{
-						void* alloc1 = alloc.Allocate(sizeof(uint32_t), 2);
-						void* alloc2 = alloc.Allocate(sizeof(uint32_t), 2);
-						alloc.Free(alloc1);
-						return alloc2 != alloc.Front();
-					}());
+				{
+					void* alloc1 = alloc.Allocate(sizeof(uint32_t), 2);
+					void* alloc2 = alloc.Allocate(sizeof(uint32_t), 2);
+					alloc.Free(alloc1);
+					return alloc2 != alloc.Front();
+				}());
 			}
 			{
 				DoubleEndedStackAllocator alloc(1024U);
 				Tests::Test_Case_Failure("Verify fail on free back of invalid memory pointer (nullptr)", [&alloc]()
-					{
-						void* ptr = alloc.AllocateBack(sizeof(uint32_t), 1);
-						alloc.FreeBack(nullptr);
-						return ptr != alloc.Back();
-					}());
+				{
+					void* ptr = alloc.AllocateBack(sizeof(uint32_t), 1);
+					alloc.FreeBack(nullptr);
+					return ptr != alloc.Back();
+				}());
 			}
 			{
 				DoubleEndedStackAllocator alloc(1024U);
 				Tests::Test_Case_Failure("Verify fail on free back of invalid memory pointer (OutOfBounds)", [&alloc]()
-					{
-						void* ptr = alloc.AllocateBack(sizeof(uint32_t), 1);
-						void* helper = ptr;
-						helper = reinterpret_cast<void*>(reinterpret_cast<uintptr_t>(helper) + 1);
-						alloc.FreeBack(helper);
-						return ptr != alloc.Back();
-					}());
+				{
+					void* ptr = alloc.AllocateBack(sizeof(uint32_t), 1);
+					void* helper = ptr;
+					helper = reinterpret_cast<void*>(reinterpret_cast<uintptr_t>(helper) + 1);
+					alloc.FreeBack(helper);
+					return ptr != alloc.Back();
+				}());
 			}
 			{
 				DoubleEndedStackAllocator alloc(1024U);
 				Tests::Test_Case_Failure("Verify fail on free back of invalid memory pointer (LIFO Validation)", [&alloc]()
-					{
-						void* alloc1 = alloc.AllocateBack(sizeof(uint32_t), 2);
-						void* alloc2 = alloc.AllocateBack(sizeof(uint32_t), 2);
-						alloc.FreeBack(alloc1);
-						return alloc2 != alloc.Back();
-					}());
+				{
+					void* alloc1 = alloc.AllocateBack(sizeof(uint32_t), 2);
+					void* alloc2 = alloc.AllocateBack(sizeof(uint32_t), 2);
+					alloc.FreeBack(alloc1);
+					return alloc2 != alloc.Back();
+				}());
 			}
-#ifdef WITH_DEBUG_CANARIES
+#if WITH_DEBUG_CANARIES
 			{
 				DoubleEndedStackAllocator alloc(1024U);
 				Tests::Test_Case_Failure("Verify fail on free cause canaries were overwritten", [&alloc]()
-					{
-						void* ptr = alloc.Allocate(sizeof(uint32_t), 1);
-						uint32_t* helper = reinterpret_cast<uint32_t*>(ptr);
-						helper[1] = 0x00;
-						alloc.Free(ptr);
-						return ptr == alloc.Front();
-					}());
+				{
+					void* ptr = alloc.Allocate(sizeof(uint32_t), 1);
+					uint32_t* helper = reinterpret_cast<uint32_t*>(ptr);
+					helper[1] = 0x00;
+					alloc.Free(ptr);
+					return ptr == alloc.Front();
+				}());
 			}
 			{
 				DoubleEndedStackAllocator alloc(1024U);
 				Tests::Test_Case_Failure("Verify fail on free back cause canaries were overwritten", [&alloc]()
-					{
-						void* ptr = alloc.AllocateBack(sizeof(uint32_t), 1);
-						uint32_t* helper = reinterpret_cast<uint32_t*>(ptr);
-						helper[1] = 0x00;
-						alloc.FreeBack(ptr);
-						return ptr == alloc.Back();
-					}());
+				{
+					void* ptr = alloc.AllocateBack(sizeof(uint32_t), 1);
+					uint32_t* helper = reinterpret_cast<uint32_t*>(ptr);
+					helper[1] = 0x00;
+					alloc.FreeBack(ptr);
+					return ptr == alloc.Back();
+				}());
 			}
-#endif
+#endif // WITH_DEBUG_CANARIES
 
 		}
-#endif
+#endif // _DEBUG
 
 	}
 
