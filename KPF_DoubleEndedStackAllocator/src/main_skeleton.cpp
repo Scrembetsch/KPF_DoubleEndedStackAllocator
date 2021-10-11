@@ -56,7 +56,7 @@ namespace Tests
 
 // Assignment functionality tests are going to be included here
 
-#define WITH_DEBUG_CANARIES		0	// using extra space for canaries
+#define WITH_DEBUG_CANARIES		1	// using extra space for canaries
 #define HTL_WITH_DEBUG_OUTPUT	0	// debug output
 #define HTL_PREVENT_COPY		1	// prevent copy ctor and operator
 #define HTL_PREVENT_MOVE		1	// prevent move ctor and operator
@@ -151,9 +151,13 @@ public:
 		}
 
 		mFront = alignedAddress;
-		WriteBeginCanary(alignedAddress);
-		WriteMeta(alignedAddress, lastItem, size);
-		WriteEndCanary(alignedAddress, size);
+		#if WITH_DEBUG_CANARIES
+			WriteBeginCanary(alignedAddress);
+			WriteMeta(alignedAddress, lastItem, size);
+			WriteEndCanary(alignedAddress, size);
+		#else
+			WriteMeta(alignedAddress, lastItem, size);
+		#endif
 
 		return reinterpret_cast<void*>(mFront);
 	}
@@ -196,9 +200,13 @@ public:
 		}
 
 		mBack = alignedAddress;
-		WriteBeginCanary(alignedAddress);
-		WriteMeta(alignedAddress, lastItem, size);
-		WriteEndCanary(alignedAddress, size);
+		#if WITH_DEBUG_CANARIES
+			WriteBeginCanary(alignedAddress);
+			WriteMeta(alignedAddress, lastItem, size);
+			WriteEndCanary(alignedAddress, size);
+		#else
+			WriteMeta(alignedAddress, lastItem, size);
+		#endif
 
 		return reinterpret_cast<void*>(mBack);
 	}
@@ -261,12 +269,13 @@ public:
 			FreeBack(reinterpret_cast<void*>(mBack));
 		}
 
-		// Fast way would be:
+		// just setting internal pointers would be faster,
+		// but skip pointer and canary validation
 		// mFront = mBegin;
 		// mBack = mEnd;
 	}
 
-	// Things needed for testing
+	// needed for testing
 	const void* Begin()
 	{
 		return reinterpret_cast<void*>(mBegin);
@@ -325,18 +334,12 @@ private:
 		uintptr_t canaryAddress = alignedAddress - META_SIZE - CANARY_SIZE;
 		*reinterpret_cast<uint32_t*>(canaryAddress) = CANARY;
 	}
-#else
-	void WriteBeginCanary(uintptr_t){ }
-#endif
 
-#if WITH_DEBUG_CANARIES
 	void WriteEndCanary(uintptr_t alignedAddress, size_t size)
 	{
 		uintptr_t canaryAddress = alignedAddress + size;
 		*reinterpret_cast<uint32_t*>(canaryAddress) = CANARY;
 	}
-#else
-	void WriteEndCanary(uintptr_t, size_t){ }
 #endif
 
 	// Memory Pointer needs to be valid
@@ -667,6 +670,46 @@ int main()
 		// Fail tests
 #ifndef _DEBUG
 		{
+			/* we could test if double free or free without allocate just does nothing,
+			*  but because we can rely on LIFO check, we don't support neither
+			{
+				DoubleEndedStackAllocator alloc(1024U);
+				Tests::Test_Case_Failure("Verify fail on double Free", [&alloc]()
+				{
+					void* ptr = alloc.Allocate(sizeof(uint32_t), 1);
+					alloc.Free(ptr);
+					alloc.Free(ptr);
+					return false;
+				}());
+			}
+			{
+				DoubleEndedStackAllocator alloc(1024U);
+				Tests::Test_Case_Failure("Verify fail on double FreeBack", [&alloc]()
+				{
+					void* ptr = alloc.AllocateBack(sizeof(uint32_t), 1);
+					alloc.FreeBack(ptr);
+					alloc.FreeBack(ptr);
+					return false;
+				}());
+			}
+			{
+
+				DoubleEndedStackAllocator alloc(1024U);
+				Tests::Test_Case_Failure("Verify fail on Free without Allocate", [&alloc]()
+				{
+					alloc.Free(const_cast<void*>(alloc.Front()));
+					return false;
+				}());
+			}
+			{
+
+				DoubleEndedStackAllocator alloc(1024U);
+				Tests::Test_Case_Failure("Verify fail on FreeBack without Allocate", [&alloc]()
+				{
+					alloc.FreeBack(const_cast<void*>(alloc.Back()));
+					return false;
+				}());
+			}*/
 			{
 				Tests::Test_Case_Failure("Verify fail on memory allocation", []()
 				{
