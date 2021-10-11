@@ -228,7 +228,9 @@ public:
 
 		MetaData* currentMetadata = GetMetaData(reinterpret_cast<uintptr_t>(memory));
 
-		CheckCanaries(reinterpret_cast<uintptr_t>(memory), currentMetadata->Size);
+		#if WITH_DEBUG_CANARIES
+			CheckCanaries(reinterpret_cast<uintptr_t>(memory), currentMetadata->Size);
+		#endif
 
 		// We don't care what the user has written in the memory, therefore we just set the Front to the LastItem and "ignore" the previously allocated memory
 		mFront = currentMetadata->LastItem;
@@ -251,7 +253,9 @@ public:
 
 		MetaData* currentMetadata = GetMetaData(reinterpret_cast<uintptr_t>(memory));
 
-		CheckCanaries(reinterpret_cast<uintptr_t>(memory), currentMetadata->Size);
+		#if WITH_DEBUG_CANARIES
+			CheckCanaries(reinterpret_cast<uintptr_t>(memory), currentMetadata->Size);
+		#endif
 
 		// We don't care what the user has written in the memory, therefore we just set the Back to the LastItem and "ignore" the previously allocated memory
 		mBack = currentMetadata->LastItem;
@@ -379,8 +383,6 @@ private:
 			//printf("[Warning]: Invalid End Canary!\n");
 		}
 	}
-#else
-	void CheckCanaries(uintptr_t, size_t){ }
 #endif
 
 	void WriteMeta(uintptr_t alignedAddress, uintptr_t lastItem, size_t allocatedSize)
