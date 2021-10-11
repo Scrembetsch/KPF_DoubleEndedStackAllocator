@@ -169,7 +169,7 @@ public:
 		uintptr_t lastItem = mBack;
 		uintptr_t newBack = mBack - size - CANARY_SIZE;
 
-		// Jump to next free address -> If Back == End-> Back is free address
+		// Jump to next free address -> If Back == End -> Back is free address
 		if (mEnd != mBack)
 		{
 			newBack = mBack - META_SIZE - 2 * CANARY_SIZE - size;
