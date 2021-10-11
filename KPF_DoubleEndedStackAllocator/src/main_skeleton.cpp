@@ -57,7 +57,7 @@ namespace Tests
 // Assignment functionality tests are going to be included here
 
 #define WITH_DEBUG_CANARIES		1	// using extra space for canaries
-#define HTL_WITH_DEBUG_OUTPUT	1	// debug output
+#define HTL_WITH_DEBUG_OUTPUT	0	// debug output
 #define HTL_PREVENT_COPY		1	// prevent copy ctor and operator
 #define HTL_PREVENT_MOVE		1	// prevent move ctor and operator
 #define HTL_ALLOW_GROW			1	// allow growing by using virtual memory
@@ -86,38 +86,39 @@ public:
 
 		// Reserve Memory and init Pointers
 #if HTL_ALLOW_GROW
-		size_t nAllocatedSize = 10 * 1024 * 1024; // maximum size of memory
-
 		SYSTEM_INFO si;
 		GetSystemInfo(&si);
-		DWORD pSize = si.dwPageSize;
-		printf("page size: %u bytes, allocation granularity: %u\n", si.dwPageSize, si.dwAllocationGranularity);
+		mPageSize = si.dwPageSize;
+		// pageSize 4096 bytes, allocation granularity 65536
+		//printf("page size: %u bytes, allocation granularity: %u\n", mPageSize, si.dwAllocationGranularity);
 
 		// first reserve memory from virtual space
-		void* begin = VirtualAlloc(NULL, nAllocatedSize, MEM_RESERVE, PAGE_READWRITE);
+		void* begin = VirtualAlloc(NULL, mAllocatedSize, MEM_RESERVE, PAGE_READWRITE);
 		if (!begin)
 		{
 			printf(ANSI_COLOR_RED "[Error]" ANSI_COLOR_RESET ": Not enough virtual memory to construct!\n");
 			throw std::bad_alloc();
 		}
 
-		// than commit a page of space for front
-		begin = VirtualAlloc(begin, pSize, MEM_COMMIT, PAGE_READWRITE);
+		// then commit a page of space for front
+		begin = VirtualAlloc(begin, mPageSize, MEM_COMMIT, PAGE_READWRITE);
 		if (!begin)
 		{
 			printf(ANSI_COLOR_RED "[Error]" ANSI_COLOR_RESET ": Could not commit begin page\n");
 			throw std::bad_alloc();
 		}
 		mBegin = mFront = reinterpret_cast<uintptr_t>(begin);
+		mPageEnd = mFront + mPageSize;
 
 		// and for back
-		begin = VirtualAlloc(reinterpret_cast<void*>(mBegin + nAllocatedSize - pSize), pSize, MEM_COMMIT, PAGE_READWRITE);
+		begin = VirtualAlloc(reinterpret_cast<void*>(mBegin + mAllocatedSize - mPageSize), mPageSize, MEM_COMMIT, PAGE_READWRITE);
 		if (!begin)
 		{
 			printf(ANSI_COLOR_RED "[Error]" ANSI_COLOR_RESET ": Could not commit end page\n");
 			throw std::bad_alloc();
 		}
-		mEnd = mBack = reinterpret_cast<uintptr_t>(begin);
+		mPageStart = reinterpret_cast<uintptr_t>(begin);
+		mEnd = mBack = mPageStart + mPageSize;
 #else
 		void* begin = malloc(max_size);
 		if (!begin)
@@ -173,6 +174,19 @@ public:
 
 		uintptr_t alignedAddress = AlignUp(newFront + CANARY_SIZE + META_SIZE, alignment);
 
+		// commit additional space if necessary
+		while ((alignedAddress + size + CANARY_SIZE) > mPageEnd)
+		{
+			void* begin = VirtualAlloc(reinterpret_cast<void*>(mPageEnd), mPageSize, MEM_COMMIT, PAGE_READWRITE);
+			if (!begin)
+			{
+				printf(ANSI_COLOR_RED "[Error]" ANSI_COLOR_RESET ": Could not commit additional front page\n");
+				throw std::bad_alloc();
+			}
+			mPageEnd += mPageSize;
+			printf("commited new Page Front       [%llx]\n", mPageEnd);
+		}
+
 		// Check if front allocation would overlap with back allocation
 		bool overlap = false;
 
@@ -223,6 +237,19 @@ public:
 		}
 
 		uintptr_t alignedAddress = AlignDown(newBack, alignment);
+
+		// commit additional space if necessary
+		while ((alignedAddress - META_SIZE - CANARY_SIZE) < mPageStart)
+		{
+			void* begin = VirtualAlloc(reinterpret_cast<void*>(mPageStart - mPageSize), mPageSize, MEM_COMMIT, PAGE_READWRITE);
+			if (!begin)
+			{
+				printf(ANSI_COLOR_RED "[Error]" ANSI_COLOR_RESET ": Could not commit additional end page\n");
+				throw std::bad_alloc();
+			}
+			mPageStart = mPageStart - mPageSize;
+			printf("commited new PageBack       [%llx]\n", mPageStart);
+		}
 
 		// Check if back allocation would overlap with front allocation
 		bool overlap = false;
@@ -374,17 +401,18 @@ private:
 		return val > 0 && !(val & (val - 1));
 	}
 
-	// Empty canary implementations with no variable names to get it to compile on Linux with -Wall -Werror
 #if WITH_DEBUG_CANARIES
 	void WriteBeginCanary(uintptr_t alignedAddress)
 	{
 		uintptr_t canaryAddress = alignedAddress - META_SIZE - CANARY_SIZE;
+		//printf("Begin canaryAddress: [%llx]\n", canaryAddress);
 		*reinterpret_cast<uint32_t*>(canaryAddress) = CANARY;
 	}
 
 	void WriteEndCanary(uintptr_t alignedAddress, size_t size)
 	{
 		uintptr_t canaryAddress = alignedAddress + size;
+		//printf("End canaryAddress: [%llx]\n", canaryAddress);
 		*reinterpret_cast<uint32_t*>(canaryAddress) = CANARY;
 	}
 #endif
@@ -431,7 +459,27 @@ private:
 	void WriteMeta(uintptr_t alignedAddress, uintptr_t lastItem, size_t allocatedSize)
 	{
 		uintptr_t metaAddress = alignedAddress - META_SIZE;
+		//printf("metaAddress: [%llx]\n", metaAddress);
 		*reinterpret_cast<MetaData*>(metaAddress) = MetaData(lastItem, allocatedSize);
+	}
+
+	uintptr_t AlignUp(uintptr_t address, size_t alignment)
+	{
+		uintptr_t adjust = address % alignment; // needed adjustment bits
+		if (adjust == 0)
+		{
+			return address;
+		}
+		//printf("[Info]: needed adjustment bits: [%llu]\n\n", adjust);
+		return (address + (alignment - adjust));
+	}
+
+	uintptr_t AlignDown(uintptr_t address, size_t alignment)
+	{
+		size_t offsetAddress = address;
+		//uintptr_t adjust = offsetAddress % alignment; // needed adjustment bits
+		//printf("[Info]: needed adjustment bits: [%llu]\n\n", adjust);
+		return (offsetAddress - (offsetAddress % alignment));
 	}
 
 	struct MetaData
@@ -444,6 +492,11 @@ private:
 		uintptr_t LastItem;
 		size_t Size;
 	};
+
+	MetaData* GetMetaData(uintptr_t allocSpacePtr)
+	{
+		return reinterpret_cast<MetaData*>(allocSpacePtr - META_SIZE);
+	}
 
 	static const ptrdiff_t META_SIZE = sizeof(MetaData);
 
@@ -486,27 +539,13 @@ private:
 	uintptr_t mFront = 0;
 	uintptr_t mBack = 0;
 
-	uintptr_t AlignUp(uintptr_t address, size_t alignment)
-	{
-		uintptr_t adjust = address % alignment; // needed adjustment bits
-		if (adjust == 0)
-		{
-			return address;
-		}
-		//printf("needed adjustment bits: [%llu]\n\n", adjust);
-		return (address + (alignment - adjust));
-	}
+#if HTL_ALLOW_GROW
+	size_t mAllocatedSize = 10 * 1024 * 1024; // maximum size of reserved virtual memory, for malloc using ctor param max_size
+	DWORD mPageSize = 0; // size of commitable pages in virtual memory
 
-	uintptr_t AlignDown(uintptr_t address, size_t alignment)
-	{
-		size_t offsetAddress = address;
-		return (offsetAddress - (offsetAddress % alignment));
-	}
-
-	MetaData* GetMetaData(uintptr_t allocSpacePtr)
-	{
-		return reinterpret_cast<MetaData*>(allocSpacePtr - META_SIZE);
-	}
+	uintptr_t mPageEnd = 0; // end of committed pages for front
+	uintptr_t mPageStart = 0; // begin of commited pages for back
+#endif
 };
 /** TODO
 * - reserve virtual memory to be able to grow
@@ -569,6 +608,36 @@ int main()
 						&& alloc1 > alloc.Begin()
 						&& alloc3 == alloc.Front()
 						&& alloc3 < alloc.Back();
+				}());
+			}
+			{
+				DoubleEndedStackAllocator alloc(1024U);
+				Tests::Test_Case_Success("Verify Large Multi AllocationBack", [&alloc]()
+				{
+					size_t totalSize = 0;
+					size_t size = 0;
+					while (totalSize < 4096) // fill more than a page
+					{
+						size = 1024;
+						alloc.AllocateBack(size, 32);
+						totalSize += size;
+					}
+					return true;
+				}());
+			}
+			{
+				DoubleEndedStackAllocator alloc(1024U);
+				Tests::Test_Case_Success("Verify Large Multi Allocation", [&alloc]()
+				{
+					size_t totalSize = 0;
+					size_t size = 0;
+					while (totalSize < 4096) // fill more than a page
+					{
+						size = 1024;
+						alloc.Allocate(size, 32);
+						totalSize += size;
+					}
+					return true;
 				}());
 			}
 			{
