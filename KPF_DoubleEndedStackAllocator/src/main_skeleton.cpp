@@ -57,12 +57,17 @@ namespace Tests
 // Assignment functionality tests are going to be included here
 
 #define WITH_DEBUG_CANARIES		1	// using extra space for canaries
-#define HTL_WITH_DEBUG_OUTPUT	0	// debug output
+#define HTL_WITH_DEBUG_OUTPUT	1	// debug output
 #define HTL_PREVENT_COPY		1	// prevent copy ctor and operator
 #define HTL_PREVENT_MOVE		1	// prevent move ctor and operator
+#define HTL_ALLOW_GROW			1	// allow growing by using virtual memory
 
 //#undef assert
 //#define assert(arg)
+
+#if HTL_ALLOW_GROW
+	#include<windows.h>
+#endif
 
 /**
 * You work on your DoubleEndedStackAllocator. Stick to the provided interface, this is
@@ -76,23 +81,54 @@ class DoubleEndedStackAllocator
 public:
 	DoubleEndedStackAllocator(size_t max_size)
 	{
-		// TODO:
-		//	- VirtualAlloc
-		//	- check if begin and end are clean?
-
 		// TODO: Do we need this?
 		static_assert(sizeof(size_t) == sizeof(uintptr_t), "Size mismatch of size_t and uintptr_t");
 
 		// Reserve Memory and init Pointers
+#if HTL_ALLOW_GROW
+		size_t nAllocatedSize = 10 * 1024 * 1024; // maximum size of memory
+
+		SYSTEM_INFO si;
+		GetSystemInfo(&si);
+		DWORD pSize = si.dwPageSize;
+		printf("page size: %u bytes, allocation granularity: %u\n", si.dwPageSize, si.dwAllocationGranularity);
+
+		// first reserve memory from virtual space
+		void* begin = VirtualAlloc(NULL, nAllocatedSize, MEM_RESERVE, PAGE_READWRITE);
+		if (!begin)
+		{
+			printf(ANSI_COLOR_RED "[Error]" ANSI_COLOR_RESET ": Not enough virtual memory to construct!\n");
+			throw std::bad_alloc();
+		}
+
+		// than commit a page of space for front
+		begin = VirtualAlloc(begin, pSize, MEM_COMMIT, PAGE_READWRITE);
+		if (!begin)
+		{
+			printf(ANSI_COLOR_RED "[Error]" ANSI_COLOR_RESET ": Could not commit begin page\n");
+			throw std::bad_alloc();
+		}
+		mBegin = mFront = reinterpret_cast<uintptr_t>(begin);
+
+		// and for back
+		begin = VirtualAlloc(reinterpret_cast<void*>(mBegin + nAllocatedSize - pSize), pSize, MEM_COMMIT, PAGE_READWRITE);
+		if (!begin)
+		{
+			printf(ANSI_COLOR_RED "[Error]" ANSI_COLOR_RESET ": Could not commit end page\n");
+			throw std::bad_alloc();
+		}
+		mEnd = mBack = reinterpret_cast<uintptr_t>(begin);
+#else
 		void* begin = malloc(max_size);
 		if (!begin)
 		{
-			printf(ANSI_COLOR_RED "[Error]" ANSI_COLOR_RESET ": Not enough memory to construct!\n");
+			printf(ANSI_COLOR_RED "[Error]" ANSI_COLOR_RESET ": Not enough stack memory to construct!\n");
 			throw std::bad_alloc();
 		}
 
 		mBegin = mFront = reinterpret_cast<uintptr_t>(begin);
 		mEnd = mBack = mBegin + max_size;
+#endif
 
 		#if HTL_WITH_DEBUG_OUTPUT
 			printf("constructed allocator from \n[%llx] to\n[%llx]\n", mBegin, mEnd);
@@ -105,9 +141,16 @@ public:
 	{
 		Reset();
 
-		// TODO: give reserved memory back to system
+		// release reserved memory back to system
 		void* begin = reinterpret_cast<void*>(mBegin);
-		if (begin) free(begin);
+		if (begin)
+		{
+#if HTL_ALLOW_GROW
+			VirtualFree(begin, 0, MEM_RELEASE);
+#else
+			free(begin);
+#endif
+		}
 	}
 
 	void* Allocate(size_t size, size_t alignment)
