@@ -1,23 +1,16 @@
 /**
-* Exercise: "DoubleEndedStackAllocator with Canaries" OR "Growing DoubleEndedStackAllocator with Canaries (VMEM)"
+* Exercise: "Growing DoubleEndedStackAllocator with Canaries (VMEM)"
 * Group members: Handl Anja (gs20m005), Tributsch Harald (gs20m008), Leithner Michael (gs20m012)
-*
-* open issues:
-* ============
-* - virtual memory allocation for growing VMEM
-*		Michael
-* - allocate, align
-*		Harald
-* - free, reset
-*		Anja
 **/
 
 #include <cassert>
 #include <iostream>
 
 #include <malloc.h>
+// TODO: Rephrase this comment
 //#include <unordered_set> // used for setup a set to test invalid aligns
 
+// Color defines for test results
 #define ANSI_COLOR_RED     "\x1b[31m"
 #define ANSI_COLOR_GREEN   "\x1b[32m"
 #define ANSI_COLOR_RESET   "\x1b[0m"
@@ -56,11 +49,11 @@ namespace Tests
 
 // Assignment functionality tests are going to be included here
 
-#define WITH_DEBUG_CANARIES		1	// using extra space for canaries
-#define HTL_WITH_DEBUG_OUTPUT	0	// debug output
-#define HTL_PREVENT_COPY		1	// prevent copy ctor and operator
-#define HTL_PREVENT_MOVE		1	// prevent move ctor and operator
-#define HTL_ALLOW_GROW			1	// allow growing by using virtual memory
+#define WITH_DEBUG_CANARIES		1	// Using extra space for canaries
+#define HTL_WITH_DEBUG_OUTPUT	0	// Debug output
+#define HTL_PREVENT_COPY		1	// Prevent copy ctor and operator
+#define HTL_PREVENT_MOVE		1	// Prevent move ctor and operator
+#define HTL_ALLOW_GROW			1	// Allow growing by using virtual memory
 
 //#undef assert
 //#define assert(arg)
@@ -93,10 +86,10 @@ public:
 		SYSTEM_INFO si;
 		GetSystemInfo(&si);
 		mPageSize = si.dwPageSize;
-		// pageSize 4096 bytes, allocation granularity 65536
+		// PageSize 4096 bytes, allocation granularity 65536
 		//printf("page size: %u bytes, allocation granularity: %u\n", mPageSize, si.dwAllocationGranularity);
 
-		// first reserve memory from virtual space
+		// First reserve memory from virtual space
 		void* begin = VirtualAlloc(NULL, mAllocatedSize, MEM_RESERVE, PAGE_READWRITE);
 		if (!begin)
 		{
@@ -104,7 +97,7 @@ public:
 			throw std::bad_alloc();
 		}
 
-		// then commit a page of space for front
+		// Then commit a page of space for front...
 		begin = VirtualAlloc(begin, mPageSize, MEM_COMMIT, PAGE_READWRITE);
 		if (!begin)
 		{
@@ -114,7 +107,7 @@ public:
 		mBegin = mFront = reinterpret_cast<uintptr_t>(begin);
 		mPageEnd = mFront + mPageSize;
 
-		// and for back
+		// ...and for back
 		begin = VirtualAlloc(reinterpret_cast<void*>(mBegin + mAllocatedSize - mPageSize), mPageSize, MEM_COMMIT, PAGE_READWRITE);
 		if (!begin)
 		{
@@ -136,6 +129,7 @@ public:
 #endif
 
 #if HTL_WITH_DEBUG_OUTPUT
+		// Custom debug output
 		printf("constructed allocator from \n[%llx] to\n[%llx]\n", mBegin, mEnd);
 		printf("size: [%zu]\n", max_size);
 		printf("diff: [%llu]\n", mEnd - mBegin);
@@ -146,7 +140,7 @@ public:
 	{
 		Reset();
 
-		// release reserved memory back to system
+		// Release reserved memory back to system
 		void* begin = reinterpret_cast<void*>(mBegin);
 		if (begin)
 		{
@@ -178,7 +172,7 @@ public:
 
 		uintptr_t alignedAddress = AlignUp(newFront + CANARY_SIZE + META_SIZE, alignment);
 
-		// commit additional space if necessary
+		// Commit additional space if necessary
 		while ((alignedAddress + size + CANARY_SIZE) > mPageEnd)
 		{
 			void* begin = VirtualAlloc(reinterpret_cast<void*>(mPageEnd), mPageSize, MEM_COMMIT, PAGE_READWRITE);
@@ -193,11 +187,9 @@ public:
 
 		// Check if front allocation would overlap with back allocation
 		bool overlap = false;
-
-		// Case when there are no back allocation
 		if (mBack == mEnd)
 		{
-			overlap |= (alignedAddress + size + CANARY_SIZE) >= mBack;
+			overlap |= (alignedAddress + size + CANARY_SIZE) >= mBack;	// In this case, there are no back allocations
 		}
 		else
 		{
@@ -241,7 +233,7 @@ public:
 
 		uintptr_t alignedAddress = AlignDown(newBack, alignment);
 
-		// commit additional space if necessary
+		// Commit additional space if necessary
 		while ((alignedAddress - META_SIZE - CANARY_SIZE) < mPageStart)
 		{
 			void* begin = VirtualAlloc(reinterpret_cast<void*>(mPageStart - mPageSize), mPageSize, MEM_COMMIT, PAGE_READWRITE);
@@ -258,7 +250,7 @@ public:
 		bool overlap = false;
 		if (mFront == mBegin)
 		{
-			overlap |= mBack - META_SIZE - CANARY_SIZE <= mFront;
+			overlap |= mBack - META_SIZE - CANARY_SIZE <= mFront;	// In this case, there are no front allocations
 		}
 		else
 		{
@@ -346,13 +338,14 @@ public:
 			FreeBack(reinterpret_cast<void*>(mBack));
 		}
 
+		// TODO: Rephrase this comment
 		// just setting internal pointers would be faster,
 		// but skip pointer and canary validation
 		// mFront = mBegin;
 		// mBack = mEnd;
 	}
 
-	// needed for testing
+	// Needed for testing
 	const void* Begin()
 	{
 		return reinterpret_cast<void*>(mBegin);
@@ -385,20 +378,20 @@ public:
 
 private:
 #if HTL_PREVENT_COPY
-	// prevent copies because default cause error (TODO: implement custom?)
+	// Prevent copies because default cause error (TODO: implement custom?)
 	DoubleEndedStackAllocator(const DoubleEndedStackAllocator&);
 
 	DoubleEndedStackAllocator& operator = (const DoubleEndedStackAllocator&);
 #endif
 
 #if HTL_PREVENT_MOVE
-	// prevent move because default cause error (TODO: implement custom?)
+	// Prevent move because default cause error (TODO: implement custom?)
 	DoubleEndedStackAllocator(const DoubleEndedStackAllocator&&);
 
 	DoubleEndedStackAllocator& operator = (const DoubleEndedStackAllocator&&);
 #endif
 
-	// power of 2 always has exactly 1 bit set in binary representation (for signed values)
+	// Power of 2 always has exactly 1 bit set in binary representation (for signed values)
 	bool IsPowerOf2(size_t val)
 	{
 		return val > 0 && !(val & (val - 1));
@@ -468,7 +461,7 @@ private:
 
 	uintptr_t AlignUp(uintptr_t address, size_t alignment)
 	{
-		uintptr_t adjust = address % alignment; // needed adjustment bits
+		uintptr_t adjust = address % alignment; // Needed adjustment bits
 		if (adjust == 0)
 		{
 			return address;
@@ -480,7 +473,7 @@ private:
 	uintptr_t AlignDown(uintptr_t address, size_t alignment)
 	{
 		size_t offsetAddress = address;
-		//uintptr_t adjust = offsetAddress % alignment; // needed adjustment bits
+		//uintptr_t adjust = offsetAddress % alignment; // Needed adjustment bits
 		//printf("[Info]: needed adjustment bits: [%llu]\n\n", adjust);
 		return (offsetAddress - (offsetAddress % alignment));
 	}
@@ -511,45 +504,50 @@ private:
 	static const ptrdiff_t CANARY_SIZE = 0;
 #endif
 
-	//					|	|	|	|
-	//					4	8	12	16
-	//			[0xCD]<meta>Front
-
-	// [Begin... [0xCD] <meta>Front, <meta>Front......, <meta>Back, [0xCD] ... End] <- memalloc (VirtualAlloc)
-
-	// first reservation
-	// [Begin...															... End]
-
-	// allocate
-	// [Begin, [0xCD], <meta>Front, [0xCD]									... End]
-
-	// allocate
-	// [Begin, [0xCD], <meta>Front, [0xCD], ... [0xCD], <meta>Front, [0xCD]	... End]
-
-	// free
-	// [Begin, [0xCD], <meta>Front, [0xCD], ...								... End]
-	//									    ^
-
-	// allocateBack
-	// [Begin, [0xCD], <meta>Front, [0xCD], ... [0xCD], <meta>Back, [0xCD]	... End]
-
-	// boundaries of our allocation
+	// Boundaries of our allocation
 	uintptr_t mBegin = 0;
 	uintptr_t mEnd = 0;
 
-	// decision: (A) using pointer to next/prev free memory or (B) points to user space begin
+	// TODO: Should we remove this comment?
+	// Decision: (A) using pointer to next/prev free memory or (B) points to user space begin
 	// --> (B)
 	uintptr_t mFront = 0;
 	uintptr_t mBack = 0;
 
 #if HTL_ALLOW_GROW
-	static const size_t mAllocatedSize = 10 * 1024 * 1024; // maximum size of reserved virtual memory, for malloc using ctor param max_size
-	DWORD mPageSize = 0; // size of commitable pages in virtual memory
+	static const size_t mAllocatedSize = 10 * 1024 * 1024; // Maximum size of reserved virtual memory, for malloc using ctor param max_size
+	DWORD mPageSize = 0; // Size of commitable pages in virtual memory
 
-	uintptr_t mPageEnd = 0; // end of committed pages for front
-	uintptr_t mPageStart = 0; // begin of commited pages for back
+	uintptr_t mPageEnd = 0; // End of committed pages for front
+	uintptr_t mPageStart = 0; // Begin of commited pages for back
 #endif
 };
+
+// Mini-Visualization of our Double Ended Stack for better understanding
+//					|	|	|	|
+//					4	8	12	16
+//			[0xCD]<meta>Front
+
+// [Begin... [0xCD] <meta>Front, <meta>Front......, <meta>Back, [0xCD] ... End] <- memalloc (VirtualAlloc)
+
+// first reservation
+// [Begin...															... End]
+
+// allocate
+// [Begin, [0xCD], <meta>Front, [0xCD]									... End]
+
+// allocate
+// [Begin, [0xCD], <meta>Front, [0xCD], ... [0xCD], <meta>Front, [0xCD]	... End]
+
+// free
+// [Begin, [0xCD], <meta>Front, [0xCD], ...								... End]
+//									    ^
+
+// allocateBack
+// [Begin, [0xCD], <meta>Front, [0xCD], ... [0xCD], <meta>Back, [0xCD]	... End]
+
+
+// TODO: Remove this comment
 /** TODO
 * - reserve virtual memory to be able to grow
 * - ability to grow
@@ -560,6 +558,8 @@ private:
 *		-> assert? throw? just msg and return nullptr?
 **/
 
+
+// You can do whatever you want here in the main function
 int main()
 {
 	// You can add your own tests here, I will call my tests at then end with a fresh instance of your allocator and a specific max_size
@@ -619,7 +619,7 @@ int main()
 				{
 					size_t totalSize = 0;
 					size_t size = 0;
-					while (totalSize < 4096) // fill more than a page
+					while (totalSize < 4096) // Fill more than a page
 					{
 						size = 1024;
 						alloc.AllocateBack(size, 32);
@@ -634,7 +634,7 @@ int main()
 				{
 					size_t totalSize = 0;
 					size_t size = 0;
-					while (totalSize < 4096) // fill more than a page
+					while (totalSize < 4096) // Fill more than a page
 					{
 						size = 1024;
 						alloc.Allocate(size, 32);
@@ -787,7 +787,7 @@ int main()
 		// Fail tests
 #ifndef _DEBUG
 		{
-			/* we could test if double free or free without allocate just does nothing,
+			/* We could test if double free or free without allocate just does nothing,
 			*  but because we can rely on LIFO check, we don't support neither
 			{
 				DoubleEndedStackAllocator alloc(1024U);
@@ -1012,8 +1012,6 @@ int main()
 #endif // _DEBUG
 
 	}
-
-	// You can do whatever you want here in the main function
 
 	// Here the assignment tests will happen - it will test basic allocator functionality.
 	{
