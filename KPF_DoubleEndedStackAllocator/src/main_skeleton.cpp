@@ -79,7 +79,11 @@ namespace Tests
 class DoubleEndedStackAllocator
 {
 public:
+#if HTL_ALLOW_GROW
+	DoubleEndedStackAllocator(size_t max_size, size_t realMaxSize = mAllocatedSize)
+#else
 	DoubleEndedStackAllocator(size_t max_size)
+#endif
 	{
 		// TODO: Do we need this?
 		static_assert(sizeof(size_t) == sizeof(uintptr_t), "Size mismatch of size_t and uintptr_t");
@@ -131,11 +135,11 @@ public:
 		mEnd = mBack = mBegin + max_size;
 #endif
 
-		#if HTL_WITH_DEBUG_OUTPUT
-			printf("constructed allocator from \n[%llx] to\n[%llx]\n", mBegin, mEnd);
-			printf("size: [%zu]\n", max_size);
-			printf("diff: [%llu]\n", mEnd - mBegin);
-		#endif
+#if HTL_WITH_DEBUG_OUTPUT
+		printf("constructed allocator from \n[%llx] to\n[%llx]\n", mBegin, mEnd);
+		printf("size: [%zu]\n", max_size);
+		printf("diff: [%llu]\n", mEnd - mBegin);
+#endif
 	}
 
 	~DoubleEndedStackAllocator(void)
@@ -208,13 +212,12 @@ public:
 		}
 
 		mFront = alignedAddress;
-		#if WITH_DEBUG_CANARIES
-			WriteBeginCanary(alignedAddress);
-			WriteMeta(alignedAddress, lastItem, size);
-			WriteEndCanary(alignedAddress, size);
-		#else
-			WriteMeta(alignedAddress, lastItem, size);
-		#endif
+#if WITH_DEBUG_CANARIES
+		WriteBeginCanary(alignedAddress);
+		WriteEndCanary(alignedAddress, size);
+#endif
+		WriteMeta(alignedAddress, lastItem, size);
+
 
 		return reinterpret_cast<void*>(mFront);
 	}
@@ -270,13 +273,13 @@ public:
 		}
 
 		mBack = alignedAddress;
-		#if WITH_DEBUG_CANARIES
-			WriteBeginCanary(alignedAddress);
-			WriteMeta(alignedAddress, lastItem, size);
-			WriteEndCanary(alignedAddress, size);
-		#else
-			WriteMeta(alignedAddress, lastItem, size);
-		#endif
+
+#if WITH_DEBUG_CANARIES
+		WriteBeginCanary(alignedAddress);
+		WriteEndCanary(alignedAddress, size);
+#endif
+		
+		WriteMeta(alignedAddress, lastItem, size);
 
 		return reinterpret_cast<void*>(mBack);
 	}
@@ -298,9 +301,9 @@ public:
 
 		MetaData* currentMetadata = GetMetaData(reinterpret_cast<uintptr_t>(memory));
 
-		#if WITH_DEBUG_CANARIES
-			CheckCanaries(reinterpret_cast<uintptr_t>(memory), currentMetadata->Size);
-		#endif
+#if WITH_DEBUG_CANARIES
+		CheckCanaries(reinterpret_cast<uintptr_t>(memory), currentMetadata->Size);
+#endif
 
 		// We don't care what the user has written in the memory, therefore we just set the Front to the LastItem and "ignore" the previously allocated memory
 		mFront = currentMetadata->LastItem;
@@ -323,9 +326,9 @@ public:
 
 		MetaData* currentMetadata = GetMetaData(reinterpret_cast<uintptr_t>(memory));
 
-		#if WITH_DEBUG_CANARIES
-			CheckCanaries(reinterpret_cast<uintptr_t>(memory), currentMetadata->Size);
-		#endif
+#if WITH_DEBUG_CANARIES
+		CheckCanaries(reinterpret_cast<uintptr_t>(memory), currentMetadata->Size);
+#endif
 
 		// We don't care what the user has written in the memory, therefore we just set the Back to the LastItem and "ignore" the previously allocated memory
 		mBack = currentMetadata->LastItem;
@@ -502,7 +505,7 @@ private:
 
 #if WITH_DEBUG_CANARIES
 	//static const uint32_t CANARY = 0xDEADC0DE;
-	static const uint32_t CANARY = 0xDEC0ADDE;
+	static const uint32_t CANARY = 0xDEC0ADDE;	// Reverse, because little/big endian
 	static const ptrdiff_t CANARY_SIZE = sizeof(CANARY);
 #else
 	static const ptrdiff_t CANARY_SIZE = 0;
@@ -540,7 +543,7 @@ private:
 	uintptr_t mBack = 0;
 
 #if HTL_ALLOW_GROW
-	size_t mAllocatedSize = 10 * 1024 * 1024; // maximum size of reserved virtual memory, for malloc using ctor param max_size
+	static const size_t mAllocatedSize = 10 * 1024 * 1024; // maximum size of reserved virtual memory, for malloc using ctor param max_size
 	DWORD mPageSize = 0; // size of commitable pages in virtual memory
 
 	uintptr_t mPageEnd = 0; // end of committed pages for front
