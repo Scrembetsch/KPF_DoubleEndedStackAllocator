@@ -5,7 +5,6 @@
 
 #include <cassert>
 #include <iostream>
-
 #include <malloc.h>
 // TODO: Rephrase this comment
 //#include <unordered_set> // used for setup a set to test invalid aligns
@@ -55,6 +54,7 @@ namespace Tests
 #define HTL_PREVENT_MOVE		1	// Prevent move ctor and operator
 #define HTL_ALLOW_GROW			1	// Allow growing by using virtual memory
 
+// TODO: can this be removed? Linux support is not given anymore :(
 //#undef assert
 //#define assert(arg)
 
@@ -73,6 +73,7 @@ class DoubleEndedStackAllocator
 {
 public:
 #if HTL_ALLOW_GROW
+	// TODO: ask if this is okay -> supporting a default param to enable custom virtual memory size for testing
 	DoubleEndedStackAllocator(size_t max_size, size_t realMaxSize = mAllocatedSize)
 #else
 	DoubleEndedStackAllocator(size_t max_size)
@@ -86,16 +87,19 @@ public:
 		SYSTEM_INFO si;
 		GetSystemInfo(&si);
 		mPageSize = si.dwPageSize;
-		// PageSize 4096 bytes, allocation granularity 65536
 		//printf("page size: %u bytes, allocation granularity: %u\n", mPageSize, si.dwAllocationGranularity);
+		// -> PageSize 4096 bytes, allocation granularity 65536
 
 		// First reserve memory from virtual space
-		void* begin = VirtualAlloc(NULL, mAllocatedSize, MEM_RESERVE, PAGE_READWRITE);
+		void* begin = VirtualAlloc(NULL, realMaxSize, MEM_RESERVE, PAGE_READWRITE);
 		if (!begin)
 		{
 			printf(ANSI_COLOR_RED "[Error]" ANSI_COLOR_RESET ": Not enough virtual memory to construct!\n");
 			throw std::bad_alloc();
 		}
+#if HTL_WITH_DEBUG_OUTPUT
+		printf("reserved virtual memory from [%llx] to [%llx] for size %zu\n", reinterpret_cast<uintptr_t>(begin), (reinterpret_cast<uintptr_t>(begin) + realMaxSize), realMaxSize);
+#endif
 
 		// Then commit a page of space for front...
 		begin = VirtualAlloc(begin, mPageSize, MEM_COMMIT, PAGE_READWRITE);
@@ -106,9 +110,12 @@ public:
 		}
 		mBegin = mFront = reinterpret_cast<uintptr_t>(begin);
 		mPageEnd = mFront + mPageSize;
+#if HTL_WITH_DEBUG_OUTPUT
+		printf("mPageEnd   [%llx]\n", mPageEnd);
+#endif
 
 		// ...and for back
-		begin = VirtualAlloc(reinterpret_cast<void*>(mBegin + mAllocatedSize - mPageSize), mPageSize, MEM_COMMIT, PAGE_READWRITE);
+		begin = VirtualAlloc(reinterpret_cast<void*>(mBegin + realMaxSize - mPageSize), mPageSize, MEM_COMMIT, PAGE_READWRITE);
 		if (!begin)
 		{
 			printf(ANSI_COLOR_RED "[Error]" ANSI_COLOR_RESET ": Could not commit end page\n");
@@ -116,6 +123,10 @@ public:
 		}
 		mPageStart = reinterpret_cast<uintptr_t>(begin);
 		mEnd = mBack = mPageStart + mPageSize;
+#if HTL_WITH_DEBUG_OUTPUT
+		printf("mPageStart [%llx]\n", mPageStart);
+#endif
+
 #else
 		void* begin = malloc(max_size);
 		if (!begin)
@@ -126,13 +137,13 @@ public:
 
 		mBegin = mFront = reinterpret_cast<uintptr_t>(begin);
 		mEnd = mBack = mBegin + max_size;
-#endif
-
 #if HTL_WITH_DEBUG_OUTPUT
 		// Custom debug output
 		printf("constructed allocator from \n[%llx] to\n[%llx]\n", mBegin, mEnd);
 		printf("size: [%zu]\n", max_size);
 		printf("diff: [%llu]\n", mEnd - mBegin);
+#endif
+
 #endif
 	}
 
@@ -140,7 +151,7 @@ public:
 	{
 		Reset();
 
-		// Release reserved memory back to system
+		// release reserved memory back to system
 		void* begin = reinterpret_cast<void*>(mBegin);
 		if (begin)
 		{
@@ -152,6 +163,8 @@ public:
 		}
 	}
 
+	// allocate given amount of memory with alignment
+	// if there is not enough memory left or input params are invalid -> assert and returns a nullptr
 	void* Allocate(size_t size, size_t alignment)
 	{
 		if (false == IsPowerOf2(alignment))
@@ -172,6 +185,7 @@ public:
 
 		uintptr_t alignedAddress = AlignUp(newFront + CANARY_SIZE + META_SIZE, alignment);
 
+#if HTL_ALLOW_GROW
 		// Commit additional space if necessary
 		while ((alignedAddress + size + CANARY_SIZE) > mPageEnd)
 		{
@@ -179,11 +193,15 @@ public:
 			if (!begin)
 			{
 				printf(ANSI_COLOR_RED "[Error]" ANSI_COLOR_RESET ": Could not commit additional front page\n");
-				throw std::bad_alloc();
+				assert(!"alignment musst be a power of 2!");
+				return nullptr;
 			}
 			mPageEnd += mPageSize;
-			printf("commited new Page Front       [%llx]\n", mPageEnd);
+#if HTL_WITH_DEBUG_OUTPUT
+			printf("commited new Page Front   [%llx]\n", mPageEnd);
+#endif
 		}
+#endif // HTL_ALLOW_GROW
 
 		// Check if front allocation would overlap with back allocation
 		bool overlap = false;
@@ -233,6 +251,7 @@ public:
 
 		uintptr_t alignedAddress = AlignDown(newBack, alignment);
 
+#if HTL_ALLOW_GROW
 		// Commit additional space if necessary
 		while ((alignedAddress - META_SIZE - CANARY_SIZE) < mPageStart)
 		{
@@ -240,11 +259,15 @@ public:
 			if (!begin)
 			{
 				printf(ANSI_COLOR_RED "[Error]" ANSI_COLOR_RESET ": Could not commit additional end page\n");
-				throw std::bad_alloc();
+				assert(!"alignment musst be a power of 2!");
+				return nullptr;
 			}
 			mPageStart = mPageStart - mPageSize;
-			printf("commited new PageBack       [%llx]\n", mPageStart);
+#if HTL_WITH_DEBUG_OUTPUT
+			printf("commited new PageBack     [%llx]\n", mPageStart);
+#endif
 		}
+#endif // HTL_ALLOW_GROW
 
 		// Check if back allocation would overlap with front allocation
 		bool overlap = false;
@@ -276,6 +299,9 @@ public:
 		return reinterpret_cast<void*>(mBack);
 	}
 
+	// free previously allocated memory
+	// does nothing if provided address does not fit last allocation (LIFO requirement)
+	// asserts if detects overwritten canaries if WITH_DEBUG_CANARIES is enabled
 	void Free(void* memory)
 	{
 		if (!ValidateMemoryPointer(memory))
@@ -283,7 +309,7 @@ public:
 			return;
 		}
 
-		// LIFO Check
+		// LIFO check
 		if (reinterpret_cast<uintptr_t>(memory) != mFront)
 		{
 			assert(!"Pointer doesn't match last allocated memory, couldn't free memory");
@@ -297,7 +323,7 @@ public:
 		CheckCanaries(reinterpret_cast<uintptr_t>(memory), currentMetadata->Size);
 #endif
 
-		// We don't care what the user has written in the memory, therefore we just set the Front to the LastItem and "ignore" the previously allocated memory
+		// we don't care what the user has written in the memory, therefore we just set the Front to the LastItem and "ignore" the previously allocated memory
 		mFront = currentMetadata->LastItem;
 	}
 
@@ -308,7 +334,7 @@ public:
 			return;
 		}
 
-		// LIFO Check
+		// LIFO check
 		if (reinterpret_cast<uintptr_t>(memory) != mBack)
 		{
 			assert(!"Pointer doesn't match last allocated memory, couldn't free memory");
@@ -322,7 +348,7 @@ public:
 		CheckCanaries(reinterpret_cast<uintptr_t>(memory), currentMetadata->Size);
 #endif
 
-		// We don't care what the user has written in the memory, therefore we just set the Back to the LastItem and "ignore" the previously allocated memory
+		// we don't care what the user has written in the memory, therefore we just set the Back to the LastItem and "ignore" the previously allocated memory
 		mBack = currentMetadata->LastItem;
 	}
 
@@ -340,7 +366,7 @@ public:
 
 		// TODO: Rephrase this comment
 		// just setting internal pointers would be faster,
-		// but skip pointer and canary validation
+		// but would skip pointer and canary validation
 		// mFront = mBegin;
 		// mBack = mEnd;
 	}
@@ -377,18 +403,20 @@ public:
 	}
 
 private:
-#if HTL_PREVENT_COPY
-	// Prevent copies because default cause error (TODO: implement custom?)
-	DoubleEndedStackAllocator(const DoubleEndedStackAllocator&);
 
-	DoubleEndedStackAllocator& operator = (const DoubleEndedStackAllocator&);
+	// because no interface was given and the auto-generated default copy/move ctor would cause problems
+	// we either have to implement our own custom functionality or remove them
+	// -> we decided to prevent copy and move because in this context to us it does not make much sense
+	// to copy or move an created allocator and we didn't want to crack our heads on errors, undefined behavior
+	// or the usage of an internal mapping table to support invalidated pointers
+#if HTL_PREVENT_COPY
+	DoubleEndedStackAllocator(const DoubleEndedStackAllocator&) = delete;
+	DoubleEndedStackAllocator& operator = (const DoubleEndedStackAllocator&) = delete;
 #endif
 
 #if HTL_PREVENT_MOVE
-	// Prevent move because default cause error (TODO: implement custom?)
-	DoubleEndedStackAllocator(const DoubleEndedStackAllocator&&);
-
-	DoubleEndedStackAllocator& operator = (const DoubleEndedStackAllocator&&);
+	DoubleEndedStackAllocator(const DoubleEndedStackAllocator&&) = delete;
+	DoubleEndedStackAllocator& operator = (const DoubleEndedStackAllocator&&) = delete;
 #endif
 
 	// Power of 2 always has exactly 1 bit set in binary representation (for signed values)
@@ -431,10 +459,10 @@ private:
 	}
 
 #if WITH_DEBUG_CANARIES
-	// If Canaries are not valid, we're not allowed to free, because something has overwritten them
+	// if canaries are not valid, we're not allowed to free, because something has overwritten them
 	void CheckCanaries(uintptr_t alignedAddress, size_t size)
 	{
-		// Check Begin Canary
+		// check begin canary
 		uintptr_t canaryAddress = alignedAddress - META_SIZE - CANARY_SIZE;
 		if (*reinterpret_cast<uint32_t*>(canaryAddress) != CANARY)
 		{
@@ -442,7 +470,7 @@ private:
 			//printf("[Warning]: Invalid Front Canary!\n");
 		}
 
-		// Check End Canary
+		// check end canary
 		canaryAddress = alignedAddress + size;
 		if (*reinterpret_cast<uint32_t*>(canaryAddress) != CANARY)
 		{
@@ -509,13 +537,13 @@ private:
 	uintptr_t mEnd = 0;
 
 	// TODO: Should we remove this comment?
-	// Decision: (A) using pointer to next/prev free memory or (B) points to user space begin
+	// decision: (A) using pointer to next/prev free memory or (B) points to user space begin
 	// --> (B)
 	uintptr_t mFront = 0;
 	uintptr_t mBack = 0;
 
 #if HTL_ALLOW_GROW
-	static const size_t mAllocatedSize = 10 * 1024 * 1024; // Maximum size of reserved virtual memory, for malloc using ctor param max_size
+	static const size_t mAllocatedSize = 1024 * 1024 * 1024; // arbitrary maximum size of reserved virtual memory, for malloc using ctor param max_size
 	DWORD mPageSize = 0; // Size of commitable pages in virtual memory
 
 	uintptr_t mPageEnd = 0; // End of committed pages for front
@@ -528,48 +556,49 @@ private:
 //					4	8	12	16
 //			[0xCD]<meta>Front
 
-// [Begin... [0xCD] <meta>Front, <meta>Front......, <meta>Back, [0xCD] ... End] <- memalloc (VirtualAlloc)
+// malloc / virtualAlloc
+// [Begin ...															... End]
+//  ^
 
-// first reservation
-// [Begin...															... End]
 
 // allocate
 // [Begin, [0xCD], <meta>Front, [0xCD]									... End]
+//                       ^
 
-// allocate
-// [Begin, [0xCD], <meta>Front, [0xCD], ... [0xCD], <meta>Front, [0xCD]	... End]
+// allocate back
+// [Begin, [0xCD], <meta>Front, [0xCD], ... [0xCD], <meta>Back, [0xCD]	... End]
+//                       ^                                ^
 
 // free
-// [Begin, [0xCD], <meta>Front, [0xCD], ...								... End]
-//									    ^
-
-// allocateBack
-// [Begin, [0xCD], <meta>Front, [0xCD], ... [0xCD], <meta>Back, [0xCD]	... End]
-
-
-// TODO: Remove this comment
-/** TODO
-* - reserve virtual memory to be able to grow
-* - ability to grow
-*		just request new memory and copy?
-* - copy and move ctor/operator?
-* - allocate
-*		throw if overlap, invalid alignment, out of bounds, ...
-*		-> assert? throw? just msg and return nullptr?
-**/
-
+// [Begin, ...								[0xCD], <meta>Back, [0xCD], ... End]
+//	^													  ^
 
 // You can do whatever you want here in the main function
 int main()
 {
 	// You can add your own tests here, I will call my tests at then end with a fresh instance of your allocator and a specific max_size
 	{
-		// TODO: may define as namespace constants?
 		const size_t canarySize = DoubleEndedStackAllocator::GetCanaraySize();
 		const size_t metaSize = DoubleEndedStackAllocator::GetMetaSize();
-
 		// TODO: max supported alignment?
-		static const size_t maxAlign = 512; // SIZE_MAX;
+		const size_t maxAlign = 512; // SIZE_MAX;
+		
+
+#if HTL_ALLOW_GROW
+		SYSTEM_INFO si;
+		GetSystemInfo(&si);
+		DWORD pageSize = si.dwPageSize;
+		const size_t allocSize = 1024;
+#else
+		const size_t allocSize = sizeof(uint32_t);
+#endif
+
+		/* ensure copy and move is not available
+		DoubleEndedStackAllocator alloc(64U);
+		DoubleEndedStackAllocator alloc2(alloc);
+		DoubleEndedStackAllocator alloc3 = alloc;
+		DoubleEndedStackAllocator alloc4(std::move(alloc));
+		DoubleEndedStackAllocator alloc5 = std::move(alloc);*/
 
 		// Success tests
 		{
@@ -586,7 +615,7 @@ int main()
 			}
 			{
 				DoubleEndedStackAllocator alloc(1024U);
-				Tests::Test_Case_Success("Verify Allocation Alignment", [&alloc]()
+				Tests::Test_Case_Success("Verify Allocation Alignment", [&alloc, maxAlign]()
 				{
 					bool ret = true;
 					size_t align = 2;
@@ -614,36 +643,6 @@ int main()
 				}());
 			}
 			{
-				DoubleEndedStackAllocator alloc(1024U);
-				Tests::Test_Case_Success("Verify Large Multi AllocationBack", [&alloc]()
-				{
-					size_t totalSize = 0;
-					size_t size = 0;
-					while (totalSize < 4096) // Fill more than a page
-					{
-						size = 1024;
-						alloc.AllocateBack(size, 32);
-						totalSize += size;
-					}
-					return true;
-				}());
-			}
-			{
-				DoubleEndedStackAllocator alloc(1024U);
-				Tests::Test_Case_Success("Verify Large Multi Allocation", [&alloc]()
-				{
-					size_t totalSize = 0;
-					size_t size = 0;
-					while (totalSize < 4096) // Fill more than a page
-					{
-						size = 1024;
-						alloc.Allocate(size, 32);
-						totalSize += size;
-					}
-					return true;
-				}());
-			}
-			{
 				DoubleEndedStackAllocator alloc(64U);
 				Tests::Test_Case_Success("Verify Back Allocation Success", [&alloc]()
 				{
@@ -656,7 +655,7 @@ int main()
 			}
 			{
 				DoubleEndedStackAllocator alloc(1024U);
-				Tests::Test_Case_Success("Verify Back Allocation Alignment", [&alloc]()
+				Tests::Test_Case_Success("Verify Back Allocation Alignment", [&alloc, maxAlign]()
 				{
 					bool ret = true;
 					size_t align = 2;
@@ -782,6 +781,47 @@ int main()
 					return alloc.Back() == alloc2;
 				}());
 			}
+			// additional tests for virtual alloc
+#if HTL_ALLOW_GROW
+			{
+				Tests::Test_Case_Success("Verify overlapping memory reservation Success", [pageSize]()
+				{
+					try
+					{
+						DoubleEndedStackAllocator alloc(sizeof(uint32_t), (size_t)(pageSize * 1.5));
+						return true;
+					}
+					catch (...) {}
+					return false;
+				}());
+			}
+			{
+				DoubleEndedStackAllocator alloc(1024U);
+				Tests::Test_Case_Success("Verify dynamic front page reservation Success", [&alloc, allocSize]()
+				{
+					size_t totalSize = 0;
+					while (totalSize < 4096) // Fill more than a page
+					{
+						alloc.Allocate(allocSize, 32);
+						totalSize += allocSize;
+					}
+					return true;
+				}());
+			}
+			{
+				DoubleEndedStackAllocator alloc(1024U);
+				Tests::Test_Case_Success("Verify dynamic back page reservation Success", [&alloc, allocSize]()
+				{
+					size_t totalSize = 0;
+					while (totalSize < 4096) // Fill more than a page
+					{
+						alloc.AllocateBack(allocSize, 32);
+						totalSize += allocSize;
+					}
+					return true;
+				}());
+			}
+#endif
 		}
 
 		// Fail tests
@@ -832,7 +872,11 @@ int main()
 				{
 					try
 					{
+#if HTL_ALLOW_GROW
+						DoubleEndedStackAllocator alloc(SIZE_MAX, SIZE_MAX);
+#else
 						DoubleEndedStackAllocator alloc(SIZE_MAX);
+#endif
 						return true;
 					}
 					catch (...) {}
@@ -841,7 +885,7 @@ int main()
 			}
 			{
 				DoubleEndedStackAllocator alloc(1024U);
-				Tests::Test_Case_Failure("Verify fail on invalid align", [&alloc]()
+				Tests::Test_Case_Failure("Verify fail on invalid align", [&alloc, maxAlign]()
 				{
 					// TODO: static hash_set (or build dynamic depending on maxAlign)
 					// -> but would need to include unordered_set.h only for one test
@@ -868,18 +912,26 @@ int main()
 				}());
 			}
 			{
+#if HTL_ALLOW_GROW
+				DoubleEndedStackAllocator alloc(sizeof(uint32_t), pageSize);
+#else
 				DoubleEndedStackAllocator alloc(sizeof(uint32_t) * 3 + 6 * canarySize + 3 * metaSize);
-				Tests::Test_Case_Failure("Verify fail on Front Overlaps Back", [&alloc]()
+#endif
+				Tests::Test_Case_Failure("Verify fail on Front Overlaps Back", [&alloc, allocSize]()
 				{
-					alloc.AllocateBack(sizeof(uint32_t), 1);
-					alloc.AllocateBack(sizeof(uint32_t), 1);
-					alloc.Allocate(sizeof(uint32_t), 1);
-					void* alloc4 = alloc.Allocate(sizeof(uint32_t), 1);
+					alloc.AllocateBack(allocSize, 1);
+					alloc.AllocateBack(allocSize, 1);
+					alloc.Allocate(allocSize, 1);
+					void* alloc4 = alloc.Allocate(allocSize, 1);
 					return alloc4 != nullptr;
 				}());
 			}
 			{
+#if HTL_ALLOW_GROW
+				DoubleEndedStackAllocator alloc(sizeof(uint32_t), pageSize);
+#else
 				DoubleEndedStackAllocator alloc(sizeof(uint32_t));
+#endif
 				Tests::Test_Case_Failure("Verify fail on Front Oversize", [&alloc]()
 				{
 					void* alloc1 = alloc.Allocate(sizeof(uint64_t), 1);
