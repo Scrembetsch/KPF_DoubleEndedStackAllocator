@@ -82,7 +82,7 @@ public:
 	// Ctor throws bad alloc exception if not enough memory is available
 	// --> otherwise we would need to either the object as "not usable" and try to reserve memory at alloc calls
 	// Using default param realMaxSize to be able to reserve a given amount of virtual memory for testing
-	// Growing allocator ignores max_size and reserves an internally specified size
+	// Growing allocator ignores max_size and reserves an internally specified size to allow resizing further inizial allocated size
 	DoubleEndedStackAllocator(size_t max_size, size_t realMaxSize = mAllocatedSize)
 #else
 	DoubleEndedStackAllocator(size_t max_size)
@@ -90,6 +90,10 @@ public:
 	{
 		// Ensure we are working on fitting size types
 		static_assert(sizeof(size_t) == sizeof(uintptr_t), "Size mismatch of size_t and uintptr_t");
+
+		// Normally we would reserve a big chunk of virtual memory (defined as mAllocatedSize) to allow internal grow
+		// but if the user requests more memory, we need to support it
+		if (max_size > realMaxSize) realMaxSize = max_size;
 
 		// Reserve memory and init pointers
 #if HTL_ALLOW_GROW
