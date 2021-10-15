@@ -60,9 +60,14 @@ namespace Tests
 	assert(!expr);
 #else
 #define HTL_ASSERT(expr) \
-	printf(ANSI_COLOR_RED "[Error]" ANSI_COLOR_RESET ": %s\n", expr);
+	//printf(ANSI_COLOR_RED "[Error]" ANSI_COLOR_RESET ": %s\n", expr);
 #endif
 
+#if HTL_WITH_DEBUG_OUTPUT
+#define HTL_DEBUG(...) printf(__VA_ARGS__);
+#else
+#define HTL_DEBUG(...)
+#endif
 
 #if HTL_ALLOW_GROW
 	#include<windows.h>
@@ -91,12 +96,14 @@ public:
 		// Ensure we are working on fitting size types
 		static_assert(sizeof(size_t) == sizeof(uintptr_t), "Size mismatch of size_t and uintptr_t");
 
+
+
+#if HTL_ALLOW_GROW
 		// Normally we would reserve a big chunk of virtual memory (defined as mAllocatedSize) to allow internal grow
 		// but if the user requests more memory, we need to support it
 		if (max_size > realMaxSize) realMaxSize = max_size;
 
 		// Reserve memory and init pointers
-#if HTL_ALLOW_GROW
 		SYSTEM_INFO si;
 		GetSystemInfo(&si);
 		mPageSize = si.dwPageSize;
@@ -110,9 +117,8 @@ public:
 			printf(ANSI_COLOR_RED "[Error]" ANSI_COLOR_RESET ": Not enough virtual memory to construct!\n");
 			throw std::bad_alloc();
 		}
-#if HTL_WITH_DEBUG_OUTPUT
-		printf("reserved virtual memory from [%llx] to [%llx] for size %zu\n", reinterpret_cast<uintptr_t>(begin), (reinterpret_cast<uintptr_t>(begin) + realMaxSize), realMaxSize);
-#endif
+
+		HTL_DEBUG("reserved virtual memory from [%llx] to [%llx] for size %zu\n", reinterpret_cast<uintptr_t>(begin), (reinterpret_cast<uintptr_t>(begin) + realMaxSize), realMaxSize);
 
 		// Then commit a page of space for front...
 		begin = VirtualAlloc(begin, mPageSize, MEM_COMMIT, PAGE_READWRITE);
@@ -123,9 +129,8 @@ public:
 		}
 		mBegin = mFront = reinterpret_cast<uintptr_t>(begin);
 		mPageEnd = mFront + mPageSize;
-#if HTL_WITH_DEBUG_OUTPUT
-		printf("mPageEnd   [%llx]\n", mPageEnd);
-#endif
+
+		HTL_DEBUG("mPageEnd   [%llx]\n", mPageEnd);
 
 		// ...and for back
 		begin = VirtualAlloc(reinterpret_cast<void*>(mBegin + realMaxSize - mPageSize), mPageSize, MEM_COMMIT, PAGE_READWRITE);
@@ -136,11 +141,11 @@ public:
 		}
 		mPageStart = reinterpret_cast<uintptr_t>(begin);
 		mEnd = mBack = mPageStart + mPageSize;
-#if HTL_WITH_DEBUG_OUTPUT
-		printf("mPageStart [%llx]\n", mPageStart);
-#endif
+
+		HTL_DEBUG("mPageStart [%llx]\n", mPageStart);
 
 #else
+		// Reserve memory and init pointers
 		void* begin = malloc(max_size);
 		if (!begin)
 		{
@@ -150,11 +155,10 @@ public:
 
 		mBegin = mFront = reinterpret_cast<uintptr_t>(begin);
 		mEnd = mBack = mBegin + max_size;
-#if HTL_WITH_DEBUG_OUTPUT
-		printf("constructed allocator from \n[%llx] to\n[%llx]\n", mBegin, mEnd);
-		printf("size: [%zu]\n", max_size);
-		printf("diff: [%llu]\n", mEnd - mBegin);
-#endif
+
+		HTL_DEBUG("constructed allocator from \n[%llx] to\n[%llx]\n", mBegin, mEnd);
+		HTL_DEBUG("size: [%zu]\n", max_size);
+		HTL_DEBUG("diff: [%llu]\n", mEnd - mBegin);
 
 #endif
 	}
@@ -215,9 +219,8 @@ public:
 				return nullptr;
 			}
 			mPageEnd += mPageSize;
-#if HTL_WITH_DEBUG_OUTPUT
-			printf("Commited new Page Front   [%llx]\n", mPageEnd);
-#endif
+
+			HTL_DEBUG("Commited new Page Front   [%llx]\n", mPageEnd);
 		}
 #endif // HTL_ALLOW_GROW
 
@@ -286,9 +289,8 @@ public:
 				return nullptr;
 			}
 			mPageStart = mPageStart - mPageSize;
-#if HTL_WITH_DEBUG_OUTPUT
-			printf("Commited new PageBack     [%llx]\n", mPageStart);
-#endif
+
+			HTL_DEBUG("Commited new PageBack     [%llx]\n", mPageStart);
 		}
 #endif // HTL_ALLOW_GROW
 
