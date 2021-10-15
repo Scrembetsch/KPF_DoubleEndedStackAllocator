@@ -48,9 +48,22 @@ namespace Tests
 
 #define WITH_DEBUG_CANARIES		1	// Using extra space for canaries
 #define HTL_WITH_DEBUG_OUTPUT	0	// Debug output
-#define HTL_PREVENT_COPY		1	// Prevent copy ctor and operator
-#define HTL_PREVENT_MOVE		1	// Prevent move ctor and operator
 #define HTL_ALLOW_GROW			1	// Allow growing by using virtual memory
+
+// Define Custom output for cleaner code
+#if HTL_WITH_DEBUG_OUTPUT
+#define HTL_DEBUG(...) \
+	printf("[INFO]:"); \
+	printf(__VA_ARGS__); \
+	printf("\n");
+#else
+#define HTL_DEBUG(...)
+#endif
+#define HTL_ERROR(...) \
+	printf(ANSI_COLOR_RED "[Error]" ANSI_COLOR_RESET ":"); \
+	printf(__VA_ARGS__); \
+	printf("\n");
+
 
 // Define custom assert depending on build configuration
 // in debug mode -> just use standard assert
@@ -60,13 +73,7 @@ namespace Tests
 	assert(!expr);
 #else
 #define HTL_ASSERT(expr) \
-	//printf(ANSI_COLOR_RED "[Error]" ANSI_COLOR_RESET ": %s\n", expr);
-#endif
-
-#if HTL_WITH_DEBUG_OUTPUT
-#define HTL_DEBUG(...) printf(__VA_ARGS__);
-#else
-#define HTL_DEBUG(...)
+	HTL_ERROR(expr);
 #endif
 
 #if HTL_ALLOW_GROW
@@ -88,79 +95,79 @@ public:
 	// --> otherwise we would need to either the object as "not usable" and try to reserve memory at alloc calls
 	// Using default param realMaxSize to be able to reserve a given amount of virtual memory for testing
 	// Growing allocator ignores max_size and reserves an internally specified size to allow resizing further inizial allocated size
-	DoubleEndedStackAllocator(size_t max_size, size_t realMaxSize = mAllocatedSize)
+	DoubleEndedStackAllocator(size_t max_size, size_t realMaxSize = DEFAULT_ALLOC_SIZE)
 #else
 	DoubleEndedStackAllocator(size_t max_size)
-#endif
+#endif // HTL_ALLOW_GROW
 	{
 		// Ensure we are working on fitting size types
 		static_assert(sizeof(size_t) == sizeof(uintptr_t), "Size mismatch of size_t and uintptr_t");
 
-
-
 #if HTL_ALLOW_GROW
-		// Normally we would reserve a big chunk of virtual memory (defined as mAllocatedSize) to allow internal grow
+		// Normally we would reserve a big chunk of virtual memory (defined as DEFAULT_ALLOC_SIZE) to allow internal grow
 		// but if the user requests more memory, we need to support it
-		if (max_size > realMaxSize) realMaxSize = max_size;
+		if (max_size > realMaxSize)
+		{
+			realMaxSize = max_size;
+		}
 
 		// Reserve memory and init pointers
 		SYSTEM_INFO si;
 		GetSystemInfo(&si);
 		mPageSize = si.dwPageSize;
-		//printf("page size: %u bytes, allocation granularity: %u\n", mPageSize, si.dwAllocationGranularity);
+		//HTL_DEBUG("page size: %u bytes, allocation granularity: %u", mPageSize, si.dwAllocationGranularity);
 		// -> PageSize 4096 bytes, allocation granularity 65536
 
 		// First reserve memory from virtual space, using PAGE_NOACCESS for no access protection until pages are commited
 		void* begin = VirtualAlloc(NULL, realMaxSize, MEM_RESERVE, PAGE_NOACCESS);
 		if (!begin)
 		{
-			printf(ANSI_COLOR_RED "[Error]" ANSI_COLOR_RESET ": Not enough virtual memory to construct!\n");
+			HTL_ERROR("Not enough virtual memory to construct!");
 			throw std::bad_alloc();
 		}
 
-		HTL_DEBUG("reserved virtual memory from [%llx] to [%llx] for size %zu\n", reinterpret_cast<uintptr_t>(begin), (reinterpret_cast<uintptr_t>(begin) + realMaxSize), realMaxSize);
+		HTL_DEBUG("Reserved virtual memory from [%llx] to [%llx] for size %zu", reinterpret_cast<uintptr_t>(begin), (reinterpret_cast<uintptr_t>(begin) + realMaxSize), realMaxSize);
 
 		// Then commit a page of space for front...
 		begin = VirtualAlloc(begin, mPageSize, MEM_COMMIT, PAGE_READWRITE);
 		if (!begin)
 		{
-			printf(ANSI_COLOR_RED "[Error]" ANSI_COLOR_RESET ": Could not commit begin page\n");
+			HTL_ERROR("Could not commit begin page");
 			throw std::bad_alloc();
 		}
 		mBegin = mFront = reinterpret_cast<uintptr_t>(begin);
 		mPageEnd = mFront + mPageSize;
 
-		HTL_DEBUG("mPageEnd   [%llx]\n", mPageEnd);
+		HTL_DEBUG("mPageEnd   [%llx]", mPageEnd);
 
 		// ...and for back
 		begin = VirtualAlloc(reinterpret_cast<void*>(mBegin + realMaxSize - mPageSize), mPageSize, MEM_COMMIT, PAGE_READWRITE);
 		if (!begin)
 		{
-			printf(ANSI_COLOR_RED "[Error]" ANSI_COLOR_RESET ": Could not commit end page\n");
+			HTL_ERROR("Could not commit end page");
 			throw std::bad_alloc();
 		}
 		mPageStart = reinterpret_cast<uintptr_t>(begin);
 		mEnd = mBack = mPageStart + mPageSize;
 
-		HTL_DEBUG("mPageStart [%llx]\n", mPageStart);
+		HTL_DEBUG("mPageStart [%llx]", mPageStart);
 
 #else
 		// Reserve memory and init pointers
 		void* begin = malloc(max_size);
 		if (!begin)
 		{
-			printf(ANSI_COLOR_RED "[Error]" ANSI_COLOR_RESET ": Not enough stack memory to construct!\n");
+			HTL_ERROR("Not enough stack memory to construct!");
 			throw std::bad_alloc();
 		}
 
 		mBegin = mFront = reinterpret_cast<uintptr_t>(begin);
 		mEnd = mBack = mBegin + max_size;
 
-		HTL_DEBUG("constructed allocator from \n[%llx] to\n[%llx]\n", mBegin, mEnd);
-		HTL_DEBUG("size: [%zu]\n", max_size);
-		HTL_DEBUG("diff: [%llu]\n", mEnd - mBegin);
-
-#endif
+		HTL_DEBUG("constructed allocator from [%llx] to [%llx]", mBegin, mEnd);
+		HTL_DEBUG("size: [%zu]", max_size);
+		HTL_DEBUG("diff: [%llu]", mEnd - mBegin);
+#endif // HTL_ALLOW_GROW
 	}
 
 	~DoubleEndedStackAllocator(void)
@@ -175,7 +182,7 @@ public:
 			VirtualFree(begin, 0, MEM_RELEASE);
 #else
 			free(begin);
-#endif
+#endif // HTL_ALLOW_GROW
 		}
 	}
 
@@ -183,16 +190,8 @@ public:
 	// If there is not enough memory left or input params are invalid -> assert and returns a nullptr
 	void* Allocate(size_t size, size_t alignment)
 	{
-		if (false == IsPowerOf2(alignment))
+		if (!CheckAllocateParameters(size, alignment))
 		{
-			HTL_ASSERT("Alignment for allocate musst be a power of 2!")
-			return nullptr;
-		}
-
-		// Don't let the user allocate empty space
-		if (size == 0)
-		{
-			HTL_ASSERT("Size to allocate is zero");
 			return nullptr;
 		}
 
@@ -206,6 +205,7 @@ public:
 			newFront = mFront + meta->Size + CANARY_SIZE;
 		}
 
+		// Search for aligned address with offset for canary and meta
 		uintptr_t alignedAddress = AlignUp(newFront + CANARY_SIZE + META_SIZE, alignment);
 
 #if HTL_ALLOW_GROW
@@ -220,15 +220,16 @@ public:
 			}
 			mPageEnd += mPageSize;
 
-			HTL_DEBUG("Commited new Page Front   [%llx]\n", mPageEnd);
+			HTL_DEBUG("Commited new Page Front   [%llx]", mPageEnd);
 		}
 #endif // HTL_ALLOW_GROW
 
-		// Check if front allocation would overlap with back allocation
+		// Check if front allocation would overlaps with back allocation
 		bool overlap = false;
 		if (mBack == mEnd)
 		{
-			overlap |= (alignedAddress + size + CANARY_SIZE) >= mBack;	// In this case, there are no back allocations
+			// In this case, there are no back allocations -> more space for front
+			overlap |= (alignedAddress + size + CANARY_SIZE) >= mBack;
 		}
 		else
 		{
@@ -246,7 +247,7 @@ public:
 #if WITH_DEBUG_CANARIES
 		WriteBeginCanary(alignedAddress);
 		WriteEndCanary(alignedAddress, size);
-#endif
+#endif // WITH_DEBUG_CANARIES
 		WriteMeta(alignedAddress, lastItem, size);
 
 		return reinterpret_cast<void*>(mFront);
@@ -254,16 +255,8 @@ public:
 
 	void* AllocateBack(size_t size, size_t alignment)
 	{
-		if (false == IsPowerOf2(alignment))
+		if (!CheckAllocateParameters(size, alignment))
 		{
-			HTL_ASSERT("Alignment for allocate back musst be a power of 2!")
-			return nullptr;
-		}
-
-		// Don't let the user allocate empty space
-		if (size == 0)
-		{
-			HTL_ASSERT("Size to allocate is zero");
 			return nullptr;
 		}
 
@@ -290,7 +283,7 @@ public:
 			}
 			mPageStart = mPageStart - mPageSize;
 
-			HTL_DEBUG("Commited new PageBack     [%llx]\n", mPageStart);
+			HTL_DEBUG("Commited new PageBack     [%llx]", mPageStart);
 		}
 #endif // HTL_ALLOW_GROW
 
@@ -298,7 +291,8 @@ public:
 		bool overlap = false;
 		if (mFront == mBegin)
 		{
-			overlap |= alignedAddress - META_SIZE - CANARY_SIZE <= mFront;	// In this case, there are no front allocations
+			// In this case, there are no front allocations -> more space for back
+			overlap |= alignedAddress - META_SIZE - CANARY_SIZE <= mFront;
 		}
 		else
 		{
@@ -316,7 +310,7 @@ public:
 #if WITH_DEBUG_CANARIES
 		WriteBeginCanary(alignedAddress);
 		WriteEndCanary(alignedAddress, size);
-#endif
+#endif // WITH_DEBUG_CANARIES
 		WriteMeta(alignedAddress, lastItem, size);
 
 		return reinterpret_cast<void*>(mBack);
@@ -327,50 +321,18 @@ public:
 	// Asserts if detects overwritten canaries if WITH_DEBUG_CANARIES is enabled
 	void Free(void* memory)
 	{
-		if (!ValidateMemoryPointer(memory))
+		if (mFront != mBegin)
 		{
-			return;
+			FreeMemoryAndUpdatePointer(reinterpret_cast<uintptr_t>(memory), mFront);
 		}
-
-		// LIFO check
-		if (reinterpret_cast<uintptr_t>(memory) != mFront)
-		{
-			HTL_ASSERT("Pointer doesn't match last allocated memory, couldn't free memory")
-			return;
-		}
-
-		MetaData* currentMetadata = GetMetaData(reinterpret_cast<uintptr_t>(memory));
-
-#if WITH_DEBUG_CANARIES
-		CheckCanaries(reinterpret_cast<uintptr_t>(memory), currentMetadata->Size);
-#endif
-
-		// We don't care what the user has written in the memory, therefore we just set Front to the LastItem and "ignore" the previously allocated memory
-		mFront = currentMetadata->LastItem;
 	}
 
 	void FreeBack(void* memory)
 	{
-		if (!ValidateMemoryPointer(memory))
+		if (mBack != mEnd)
 		{
-			return;
+			FreeMemoryAndUpdatePointer(reinterpret_cast<uintptr_t>(memory), mBack);
 		}
-
-		// LIFO check
-		if (reinterpret_cast<uintptr_t>(memory) != mBack)
-		{
-			HTL_ASSERT("Pointer doesn't match last allocated memory, couldn't free memory")
-			return;
-		}
-
-		MetaData* currentMetadata = GetMetaData(reinterpret_cast<uintptr_t>(memory));
-
-#if WITH_DEBUG_CANARIES
-		CheckCanaries(reinterpret_cast<uintptr_t>(memory), currentMetadata->Size);
-#endif
-
-		// We don't care what the user has written in the memory, therefore we just set the mack to LastItem and "ignore" the previously allocated memory
-		mBack = currentMetadata->LastItem;
 	}
 
 	void Reset(void)
@@ -427,58 +389,51 @@ private:
 	// -> We decided to prevent copy and move because in this context to us it does not make much sense
 	// to copy or move a created allocator and we didn't want to crack our heads on errors, undefined behavior
 	// or the usage of an internal mapping table to support invalidated pointers
-#if HTL_PREVENT_COPY
 	DoubleEndedStackAllocator(const DoubleEndedStackAllocator&) = delete;
 	DoubleEndedStackAllocator& operator = (const DoubleEndedStackAllocator&) = delete;
-#endif
-
-#if HTL_PREVENT_MOVE
 	DoubleEndedStackAllocator(const DoubleEndedStackAllocator&&) = delete;
 	DoubleEndedStackAllocator& operator = (const DoubleEndedStackAllocator&&) = delete;
-#endif
 
 	// Power of 2 always has exactly 1 bit set in binary representation (for signed values)
-	bool IsPowerOf2(size_t val)
+	static bool IsPowerOf2(size_t val)
 	{
 		return val > 0 && !(val & (val - 1));
 	}
 
+	static bool CheckAllocateParameters(size_t size, size_t alignment)
+	{
+		bool ret = true;
+		if (!IsPowerOf2(alignment))
+		{
+			ret = false;
+			HTL_ASSERT("Alignment for allocate musst be a power of 2!")
+		}
+		// Don't let the user allocate empty space
+		if (size == 0)
+		{
+			ret = false;
+			HTL_ASSERT("Size to allocate is zero");
+		}
+		return ret;
+	}
+
 #if WITH_DEBUG_CANARIES
-	void WriteBeginCanary(uintptr_t alignedAddress)
+	static void WriteBeginCanary(uintptr_t alignedAddress)
 	{
 		uintptr_t canaryAddress = alignedAddress - META_SIZE - CANARY_SIZE;
-		//printf("Begin canaryAddress: [%llx]\n", canaryAddress);
+		//HTL_DEBUG("Begin canaryAddress: [%llx]", canaryAddress);
 		*reinterpret_cast<uint32_t*>(canaryAddress) = CANARY;
 	}
 
-	void WriteEndCanary(uintptr_t alignedAddress, size_t size)
+	static void WriteEndCanary(uintptr_t alignedAddress, size_t size)
 	{
 		uintptr_t canaryAddress = alignedAddress + size;
-		//printf("End canaryAddress: [%llx]\n", canaryAddress);
+		//HTL_DEBUG("End canaryAddress: [%llx]", canaryAddress);
 		*reinterpret_cast<uint32_t*>(canaryAddress) = CANARY;
 	}
-#endif
 
-	// Memory pointer needs to be valid
-	bool ValidateMemoryPointer(void* memory)
-	{
-		if (memory == nullptr)
-		{
-			HTL_ASSERT("Invalid Pointer, couldn't free memory")
-			return false;
-		}
-
-		if ((reinterpret_cast<uintptr_t>(memory) < mBegin) || (reinterpret_cast<uintptr_t>(memory) > mEnd))
-		{
-			HTL_ASSERT("Pointer not in range of reserved space, couldn't free memory")
-			return false;
-		}
-		return true;
-	}
-
-#if WITH_DEBUG_CANARIES
 	// If canaries are not valid, we're not allowed to free, because something has overwritten them
-	void CheckCanaries(uintptr_t alignedAddress, size_t size)
+	static void CheckCanaries(uintptr_t alignedAddress, size_t size)
 	{
 		// Check begin canary
 		uintptr_t canaryAddress = alignedAddress - META_SIZE - CANARY_SIZE;
@@ -496,32 +451,65 @@ private:
 	}
 #endif
 
-	void WriteMeta(uintptr_t alignedAddress, uintptr_t lastItem, size_t allocatedSize)
+	// Check for possible pointer errors
+	void ValidateMemoryPointer(uintptr_t memory) const
+	{
+		if (reinterpret_cast<void*>(memory) == nullptr)
+		{
+			HTL_ASSERT("Invalid Pointer, couldn't free memory")
+		}
+		else if (memory < mBegin || memory > mEnd)
+		{
+			HTL_ASSERT("Pointer not in range of reserved space, couldn't free memory")
+		}
+	}
+
+	static void WriteMeta(uintptr_t alignedAddress, uintptr_t lastItem, size_t allocatedSize)
 	{
 		uintptr_t metaAddress = alignedAddress - META_SIZE;
-		//printf("metaAddress: [%llx]\n", metaAddress);
+		//HTL_DEBUG("metaAddress: [%llx]", metaAddress);
 		*reinterpret_cast<MetaData*>(metaAddress) = MetaData(lastItem, allocatedSize);
 	}
 
-	uintptr_t AlignUp(uintptr_t address, size_t alignment)
+	static uintptr_t AlignUp(uintptr_t address, size_t alignment)
 	{
 		uintptr_t adjust = address % alignment; // Needed adjustment bits
 		if (adjust == 0)
 		{
 			return address;
 		}
-		//printf("[Info]: needed adjustment bits: [%llu]\n\n", adjust);
+		//HTL_DEBUG("[Info]: needed adjustment bits: [%llu]", adjust);
 		return (address + (alignment - adjust));
 	}
 
-	uintptr_t AlignDown(uintptr_t address, size_t alignment)
+	static uintptr_t AlignDown(uintptr_t address, size_t alignment)
 	{
-		size_t offsetAddress = address;
-		//uintptr_t adjust = offsetAddress % alignment; // Needed adjustment bits
-		//printf("[Info]: needed adjustment bits: [%llu]\n\n", adjust);
-		return (offsetAddress - (offsetAddress % alignment));
+		//uintptr_t adjust = address % alignment; // Needed adjustment bits
+		//HTL_DEBUG("[Info]: needed adjustment bits: [%llu], adjust);
+		return (address - (address % alignment));
 	}
 
+	void FreeMemoryAndUpdatePointer(uintptr_t pointerToFree, uintptr_t& pointerToUpdate)
+	{
+		// LIFO check
+		if (pointerToFree != pointerToUpdate)
+		{
+			ValidateMemoryPointer(pointerToFree);
+			HTL_ASSERT("Pointer doesn't match last allocated memory, couldn't free memory")
+			return;
+		}
+
+		MetaData* currentMetadata = GetMetaData(pointerToFree);
+
+#if WITH_DEBUG_CANARIES
+		CheckCanaries(pointerToFree, currentMetadata->Size);
+#endif
+
+		// We don't care what the user has written in the memory, therefore we just set the mack to LastItem and "ignore" the previously allocated memory
+		pointerToUpdate = currentMetadata->LastItem;
+	}
+
+	// We use a struct to save metadata, for easier save/write and possible adjustments
 	struct MetaData
 	{
 		MetaData(uintptr_t lastItem, size_t size)
@@ -537,6 +525,10 @@ private:
 	{
 		MetaData* data = reinterpret_cast<MetaData*>(allocSpacePtr - META_SIZE);
 		// @Vogl How could we verify that MetaData struct is not corrupted?
+
+		// Possible ideas form our side:	Check if size is < (mEnd - mBegin)
+		//									LastItem needs to point to pointer in range (mBegin - mEnd)
+		//									LastItem needs to have valid meta data
 		return data;
 	}
 
@@ -560,7 +552,7 @@ private:
 	uintptr_t mBack = 0;
 
 #if HTL_ALLOW_GROW
-	static const size_t mAllocatedSize = 1024 * 1024 * 1024; // Arbitrary maximum size of reserved virtual memory, for malloc using ctor param max_size
+	static const size_t DEFAULT_ALLOC_SIZE = 1024 * 1024 * 1024; // Arbitrary maximum size of reserved virtual memory, for malloc using ctor param max_size
 	DWORD mPageSize = 0; // Size of commitable pages in virtual memory
 
 	uintptr_t mPageEnd = 0; // End of committed pages for front
