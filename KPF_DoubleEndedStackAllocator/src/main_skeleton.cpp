@@ -234,7 +234,7 @@ public:
 		}
 #endif // HTL_ALLOW_GROW
 
-		// Check if front allocation would overlaps with back allocation
+		// Check if front allocation would overlap with back allocation
 		bool overlap = false;
 		if (mBack == mEnd)
 		{
@@ -515,7 +515,7 @@ private:
 		CheckCanaries(pointerToFree, currentMetadata->Size);
 #endif
 
-		// We don't care what the user has written in the memory, therefore we just set the mack to LastItem and "ignore" the previously allocated memory
+		// We don't care what the user has written in the memory, therefore we just set the pointer to LastItem and "ignore" the previously allocated memory
 		pointerToUpdate = currentMetadata->LastItem;
 	}
 
