@@ -1,6 +1,10 @@
 /**
 * Exercise: "Growing DoubleEndedStackAllocator with Canaries (VMEM)"
 * Group members: Handl Anja (gs20m005), Tributsch Harald (gs20m008), Leithner Michael (gs20m012)
+* 
+* This exercise supports a growable and non-growable Double Ended Stack (see Defines)
+* Compilation of this File was testet with C++14 (as VS 2019 doesn't support older standards by default)
+* Parts of the code can be enabled/disabled by using the defines after namespace Tests
 **/
 
 #include <cassert>
@@ -46,24 +50,34 @@ namespace Tests
 
 // Assignment functionality tests are going to be included here
 
-#define WITH_DEBUG_CANARIES		1	// Using extra space for canaries
-#define HTL_WITH_DEBUG_OUTPUT	0	// Debug output
-#define HTL_ALLOW_GROW			1	// Allow growing by using virtual memory
+#define WITH_DEBUG_CANARIES		1	// Enables/Disables writing and checking of canaries
+#define HTL_ALLOW_GROW			1	// Enables/Disables growing by using virtual memory
+#define HTL_PRINT_ERRORS		1	// Enables/Disables Printing of error outputs
+#define HTL_RUN_CUSTOM_TESTS	1	// Enables/Disables Our own tests
+#define HTL_WITH_DEBUG_OUTPUT	0	// Enables/Disables Debug output from us
+
+
+#if HTL_ALLOW_GROW
+#include<windows.h>
+#endif
 
 // Define Custom output for cleaner code
 #if HTL_WITH_DEBUG_OUTPUT
 #define HTL_DEBUG(...) \
-	printf("[INFO]:"); \
+	printf("[INFO]: "); \
 	printf(__VA_ARGS__); \
 	printf("\n");
 #else
 #define HTL_DEBUG(...)
 #endif
+#if HTL_PRINT_ERRORS
 #define HTL_ERROR(...) \
-	printf(ANSI_COLOR_RED "[Error]" ANSI_COLOR_RESET ":"); \
+	printf(ANSI_COLOR_RED "[Error]" ANSI_COLOR_RESET ": "); \
 	printf(__VA_ARGS__); \
 	printf("\n");
-
+#else
+#define HTL_ERROR(...)
+#endif
 
 // Define custom assert depending on build configuration
 // in debug mode -> just use standard assert
@@ -74,10 +88,6 @@ namespace Tests
 #else
 #define HTL_ASSERT(expr) \
 	HTL_ERROR(expr);
-#endif
-
-#if HTL_ALLOW_GROW
-	#include<windows.h>
 #endif
 
 /**
@@ -521,7 +531,7 @@ private:
 		size_t Size;
 	};
 
-	MetaData* GetMetaData(uintptr_t allocSpacePtr)
+	static MetaData* GetMetaData(uintptr_t allocSpacePtr)
 	{
 		MetaData* data = reinterpret_cast<MetaData*>(allocSpacePtr - META_SIZE);
 		// @Vogl How could we verify that MetaData struct is not corrupted?
@@ -532,8 +542,6 @@ private:
 		return data;
 	}
 
-	static const ptrdiff_t META_SIZE = sizeof(MetaData);
-
 #if WITH_DEBUG_CANARIES
 	//static const uint32_t CANARY = 0xDEADC0DE;
 	static const uint32_t CANARY = 0xDEC0ADDE;	// Reverse, because little/big endian
@@ -541,6 +549,8 @@ private:
 #else
 	static const ptrdiff_t CANARY_SIZE = 0;
 #endif
+
+	static const ptrdiff_t META_SIZE = sizeof(MetaData);
 
 	// Boundaries of our allocation
 	uintptr_t mBegin = 0;
@@ -587,6 +597,7 @@ int main()
 {
 	// You can add your own tests here, I will call my tests at then end with a fresh instance of your allocator and a specific max_size
 	{
+#if HTL_RUN_CUSTOM_TESTS
 		const size_t canarySize = DoubleEndedStackAllocator::GetCanaraySize();
 		const size_t metaSize = DoubleEndedStackAllocator::GetMetaSize();
 		// We define a max align for our tests
@@ -920,11 +931,14 @@ int main()
 #endif
 				Tests::Test_Case_Failure("Verify fail on Front Overlaps Back", [&alloc, allocSize]()
 				{
-					alloc.AllocateBack(allocSize, 1);
-					alloc.AllocateBack(allocSize, 1);
-					alloc.Allocate(allocSize, 1);
+					void* alloc1 = alloc.AllocateBack(allocSize, 1);
+					void* alloc2 = alloc.AllocateBack(allocSize, 1);
+					void* alloc3 = alloc.Allocate(allocSize, 1);
 					void* alloc4 = alloc.Allocate(allocSize, 1);
-					return alloc4 != nullptr;
+					return alloc1 == nullptr
+						|| alloc2 == nullptr
+						|| alloc3 == nullptr
+						|| alloc4 != nullptr;
 				}());
 			}
 			{
@@ -947,9 +961,10 @@ int main()
 #endif
 				Tests::Test_Case_Failure("Verify fail on Front Overlaps End (MultiAlloc)", [&alloc, largeAllocSize]()
 				{
-					alloc.Allocate(largeAllocSize/2, 1);
 					void* alloc1 = alloc.Allocate(largeAllocSize/2, 1);
-					return alloc1 != nullptr;
+					void* alloc2 = alloc.Allocate(largeAllocSize/2, 1);
+					return alloc1 == nullptr
+						|| alloc2 != nullptr;
 				}());
 			}
 			{
@@ -960,11 +975,14 @@ int main()
 #endif
 				Tests::Test_Case_Failure("Verify fail on Back Overlaps Front", [&alloc, allocSize]()
 				{
-					alloc.Allocate(allocSize, 1);
-					alloc.Allocate(allocSize, 1);
-					alloc.AllocateBack(allocSize, 1);
+					void* alloc1 = alloc.Allocate(allocSize, 1);
+					void* alloc2 = alloc.Allocate(allocSize, 1);
+					void* alloc3 = alloc.AllocateBack(allocSize, 1);
 					void* alloc4 = alloc.AllocateBack(allocSize, 1);
-					return alloc4 != nullptr;
+					return alloc1 == nullptr
+						|| alloc2 == nullptr
+						|| alloc3 == nullptr
+						|| alloc4 != nullptr;
 				}());
 			}
 			{
@@ -1079,7 +1097,7 @@ int main()
 
 		}
 #endif // _DEBUG
-
+#endif // HTL_RUN_CUSTOM_TESTS
 	}
 
 	// Here the assignment tests will happen - it will test basic allocator functionality.
