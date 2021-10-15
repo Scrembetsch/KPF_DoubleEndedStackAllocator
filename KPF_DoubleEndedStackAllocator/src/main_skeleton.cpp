@@ -81,7 +81,7 @@ public:
 #if HTL_ALLOW_GROW
 	// Ctor throws bad alloc exception if not enough memory is available
 	// --> otherwise we would need to either the object as "not usable" and try to reserve memory at alloc calls
-	// Using default param realMaxSize to be able to reserve a given amount of virtual memory
+	// Using default param realMaxSize to be able to reserve a given amount of virtual memory for testing
 	// Growing allocator ignores max_size and reserves an internally specified size
 	DoubleEndedStackAllocator(size_t max_size, size_t realMaxSize = mAllocatedSize)
 #else
